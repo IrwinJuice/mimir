@@ -1,0 +1,4 @@
+/target
+bills.db
+Cargo.lock
+.idea

@@ -1,9 +1,13 @@
+mod account;
+mod error;
 mod user;
+mod utils;
 
-use crate::user::get_users;
+use crate::account::handler::{add_account, get_accounts_by_idu, update_account_stat};
+use crate::user::{create_user, get_users};
 use axum::Router;
-use axum::http::{HeaderValue, Method, StatusCode};
-use axum::routing::{get, get_service};
+use axum::http::{HeaderValue, Method, header};
+use axum::routing::{get, get_service, patch, post};
 use sqlx::SqlitePool;
 use std::fs::File;
 use tower_http::cors::CorsLayer;
@@ -29,9 +33,15 @@ async fn main() {
         // Add API routes here, e.g.:
         .route(
             "/bills/api/users",
-            get(get_users),
-            // post(create_user),
-            // delete(delete_users),
+            get(get_users).post(create_user), // delete(delete_users),
+        )
+        .route(
+            "/bills/api/users/{idu}/accounts",
+            get(get_accounts_by_idu).post(add_account), // delete(delete_users),
+        )
+        .route(
+            "/bills/api/users/{idu}/accounts/stat",
+            patch(update_account_stat),
         )
         // Serve the Angular SPA under /bills
         .nest_service("/bills", serve_dir.clone())
@@ -39,7 +49,14 @@ async fn main() {
         .layer(
             CorsLayer::new()
                 .allow_origin("http://localhost:4200".parse::<HeaderValue>().unwrap())
-                .allow_methods([Method::GET, Method::DELETE, Method::POST, Method::PUT]),
+                .allow_methods([
+                    Method::OPTIONS,
+                    Method::GET,
+                    Method::DELETE,
+                    Method::POST,
+                    Method::PUT,
+                ])
+                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]),
         )
         .with_state(pool);
 
@@ -47,13 +64,4 @@ async fn main() {
         .await
         .unwrap();
     axum::serve(listener, app).await.unwrap();
-}
-
-/// Utility function for mapping any error into a `500 Internal Server Error`
-/// response.
-fn internal_error<E>(err: E) -> (StatusCode, String)
-where
-    E: std::error::Error,
-{
-    (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
 }

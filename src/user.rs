@@ -3,8 +3,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Sqlite, SqlitePool};
-use crate::internal_error;
-
+use crate::error::AppError;
 
 #[derive(FromRow, Debug, Serialize)]
 pub struct User {
@@ -18,27 +17,27 @@ pub struct CreateUser {
     pub name: String,
 }
 
-// impl User {
-//     pub fn new(idu: u32, name: String) -> Self {
-//         Self { idu, name }
-//     }
-// }
+pub async fn create_user(
+    State(pool): State<SqlitePool>,
+    Json(payload): Json<CreateUser>,
+) -> Result<(StatusCode, Json<User>), AppError> {
+    let user = sqlx::query_as::<Sqlite, User>(
+        "INSERT INTO users (name) VALUES ($1) RETURNING idu, name",
+    )
+    .bind(payload.name)
+    .fetch_one(&pool)
+    .await?;
 
-// pub async fn create_user(
-//     Json(payload): Json<CreateUser>,
-// ) -> (StatusCode, Json<User>) {
-//
-//     (StatusCode::CREATED, Json(user))
-// }
+    Ok((StatusCode::CREATED, Json(user)))
+}
 
 pub async fn get_users(
     State(pool): State<SqlitePool>,
-) -> Result<Json<Vec<User>>, (StatusCode, String)> {
-    sqlx::query_as::<Sqlite, User>("SELECT idu, name from users")
+) -> Result<Json<Vec<User>>, AppError> {
+    let users = sqlx::query_as::<Sqlite, User>("SELECT idu, name from users")
         .fetch_all(&pool)
-        .await
-        .map(Json)
-        .map_err(internal_error)
+        .await?;
+    Ok(Json(users))
 }
 
 

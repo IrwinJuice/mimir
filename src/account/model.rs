@@ -64,7 +64,7 @@ pub struct MonoAccount {
     pub send_id: String,
     #[serde(rename = "currencyCode")]
     pub currency_code: u32,
-    pub balance: u64,
+    pub balance: u32,
     #[serde(rename = "creditLimit")]
     pub credit_limit: u32,
     #[serde(rename = "maskedPan")]
@@ -77,6 +77,12 @@ pub struct MonoAccount {
 pub struct AccountMonitor {
     pub ida: u32,
     pub external_id: String,
+    pub currency_code: u32,
+    pub balance: u32,      
+    pub credit_limit: u32, 
+    pub iban: String,      
+    pub masked_pan: String,
+    pub kind: AccountKind, 
     pub updated_at: Option<DateTime<Utc>>,
 }
 

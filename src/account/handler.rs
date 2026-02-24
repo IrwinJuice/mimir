@@ -8,8 +8,8 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::http::header::USER_AGENT;
+use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
-use std::collections::HashMap;
 use tokio::task::JoinSet;
 use tracing::error;
 
@@ -40,14 +40,21 @@ pub async fn update_account_stat(
     sniff_accounts(&pool).await;
     let monitors = get_account_monitors_by_idu(idu, &pool).await?;
 
-    let DateTimeUtc(form) = params.from.try_into()?;
+    let DateTimeUtc(from) = params.from.try_into()?;
     let DateTimeUtc(to) = params.to.try_into()?;
 
+    let monobank: Vec<&AccountMonitor> = monitors.iter().filter(|m| m.kind == AccountKind::Mono).collect();
+
+    update_mono_accounts_stat(monobank, from, to).await;
 
 
 
 
     Ok((StatusCode::OK, Json(monitors)))
+}
+
+async fn update_mono_accounts_stat(_monitors: Vec<&AccountMonitor>, _from: DateTime<Utc>, _to: DateTime<Utc>) {
+    // TODO: fetch Monobank statement for each monitor and persist
 }
 
 /// fetches all user banks and sniffs their accounts.
@@ -97,7 +104,7 @@ async fn sniff_monobank_accounts(accounts: impl Iterator<Item = Account>, pool: 
     while let Some(res) = set.join_next().await {
         match res {
             Ok(Ok(mono_accounts)) => {
-                if let Err(e) = repository::insert_accounts_monitor(&mono_accounts, pool).await {
+                if let Err(e) = repository::insert_mono_accounts_monitor(&mono_accounts, pool).await {
                     error!("Failed to persist account monitors: {}", e);
                 }
             }

@@ -40,7 +40,7 @@ pub async fn insert(
 }
 
 /// Bulk-insert a slice of `MonoAccount`s into `accounts_monitor`.
-pub async fn insert_accounts_monitor(
+pub async fn insert_mono_accounts_monitor(
     accounts: &[MonoAccount],
     pool: &SqlitePool,
 ) -> Result<(), sqlx::Error> {
@@ -49,10 +49,16 @@ pub async fn insert_accounts_monitor(
     }
 
     let mut query_builder: QueryBuilder<Sqlite> =
-        QueryBuilder::new("INSERT INTO accounts_monitor (ida, external_id) ");
+        QueryBuilder::new("INSERT INTO accounts_monitor (ida, external_id, currency_code, balance, credit_limit, iban, masked_pan) ");
 
     query_builder.push_values(accounts.iter(), |mut b, account| {
-        b.push_bind(account.ida).push_bind(account.id.clone());
+        b.push_bind(account.ida)
+            .push_bind(account.id.clone())
+            .push_bind(account.currency_code)
+            .push_bind(account.balance)
+            .push_bind(account.credit_limit)
+            .push_bind(account.iban.clone())
+            .push_bind(account.masked_pan[0].clone());
     });
 
     query_builder.build().execute(pool).await.map(|_| ())

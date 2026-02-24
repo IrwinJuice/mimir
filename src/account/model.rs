@@ -4,7 +4,7 @@ use sqlx::error::BoxDynError;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{FromRow, Sqlite};
 
-#[derive(FromRow, Debug, Serialize)]
+#[derive(FromRow, Debug, Serialize, Clone)]
 pub struct Account {
     pub ida: u32,
     pub idu: u32,
@@ -12,7 +12,7 @@ pub struct Account {
     pub token: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, Eq, PartialEq, Clone)]
 pub enum AccountKind {
     Mono,
 }
@@ -54,7 +54,7 @@ pub struct CreateAccount {
 }
 
 /// A single account entry returned from the Monobank API.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MonoAccount {
     /// The `ida` from our DB — injected after the API call.
     #[serde(skip_deserializing)]
@@ -64,7 +64,7 @@ pub struct MonoAccount {
     pub send_id: String,
     #[serde(rename = "currencyCode")]
     pub currency_code: u32,
-    pub balance: u32,
+    pub balance: u64,
     #[serde(rename = "creditLimit")]
     pub credit_limit: u32,
     #[serde(rename = "maskedPan")]
@@ -73,7 +73,7 @@ pub struct MonoAccount {
 }
 
 /// A row from the `accounts_monitor` table.
-#[derive(FromRow, Debug, Serialize)]
+#[derive(FromRow, Debug, Serialize, Clone)]
 pub struct AccountMonitor {
     pub ida: u32,
     pub external_id: String,
@@ -84,6 +84,7 @@ pub struct AccountMonitor {
     pub masked_pan: String,
     pub kind: AccountKind, 
     pub updated_at: Option<DateTime<Utc>>,
+    pub last_taken_date: Option<DateTime<Utc>>,
 }
 
 #[derive(Deserialize)]
@@ -92,3 +93,34 @@ pub struct StatQueryParams {
     pub to: String,
 }
 
+// ------------------ Monobank transaction DTO ------------------
+/// Minimal Monobank transaction structure used for mapping to `bills`.
+#[derive(Deserialize, Debug)]
+pub struct MonobankTransaction {
+    pub id: String,
+    pub time: i64, // seconds since epoch
+    pub description: Option<String>,
+    pub mcc: Option<i32>,
+    pub hold: Option<i32>,
+    pub amount: i64,
+    #[serde(rename = "currencyCode")]
+    pub currency_code: i32,
+    pub balance: Option<i64>,
+    #[serde(rename = "receiptId")]
+    pub receipt_id: Option<String>,
+}
+
+// ------------------ NewBill DTO ------------------
+#[derive(Debug)]
+pub struct NewBill {
+    pub id: String,
+    pub ida: u32,
+    pub amount: i64,
+    pub currency_code: i32,
+    pub description: Option<String>,
+    pub mcc: Option<i32>,
+    pub hold: Option<i32>,
+    pub transaction_time: DateTime<Utc>,
+    pub receipt_id: Option<String>,
+    pub balance: Option<i64>,
+}

@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS bills
 (
     id               TEXT PRIMARY KEY,
+    external_id      TEXT,
     ida              INTEGER  NOT NULL,
     amount           INTEGER  NOT NULL,
     currency_code    INTEGER  NOT NULL,
@@ -13,7 +14,9 @@ CREATE TABLE IF NOT EXISTS bills
     receipt_id       TEXT,
     balance          INTEGER,
 
-    FOREIGN KEY (ida) REFERENCES accounts (ida)
+    FOREIGN KEY (ida) REFERENCES accounts (ida),
+    FOREIGN KEY (external_id) REFERENCES accounts_monitor (external_id)
+    
 );
 
 -- Create indexes for common queries

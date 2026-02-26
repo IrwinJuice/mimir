@@ -53,6 +53,12 @@ pub struct CreateAccount {
     pub token: String,
 }
 
+/// Top-level response from `GET /personal/client-info`.
+#[derive(Deserialize, Debug)]
+pub struct MonoClientInfo {
+    pub accounts: Vec<MonoAccount>,
+}
+
 /// A single account entry returned from the Monobank API.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MonoAccount {
@@ -82,15 +88,15 @@ pub struct AccountMonitor {
     pub credit_limit: u32, 
     pub iban: String,      
     pub masked_pan: String,
-    pub kind: AccountKind, 
+    pub kind: AccountKind,
     pub updated_at: Option<DateTime<Utc>>,
     pub last_taken_date: Option<DateTime<Utc>>,
 }
 
 #[derive(Deserialize)]
 pub struct StatQueryParams {
-    pub from: String,
-    pub to: String,
+    pub from: i64,
+    pub to: i64,
 }
 
 // ------------------ Monobank transaction DTO ------------------
@@ -101,11 +107,11 @@ pub struct MonobankTransaction {
     pub time: i64, // seconds since epoch
     pub description: Option<String>,
     pub mcc: Option<i32>,
-    pub hold: Option<i32>,
+    pub hold: Option<bool>,
     pub amount: i64,
     #[serde(rename = "currencyCode")]
     pub currency_code: i32,
-    pub balance: Option<i64>,
+    pub balance: i64,
     #[serde(rename = "receiptId")]
     pub receipt_id: Option<String>,
 }
@@ -114,12 +120,13 @@ pub struct MonobankTransaction {
 #[derive(Debug)]
 pub struct NewBill {
     pub id: String,
+    pub external_id: String,
     pub ida: u32,
     pub amount: i64,
     pub currency_code: i32,
     pub description: Option<String>,
     pub mcc: Option<i32>,
-    pub hold: Option<i32>,
+    pub hold: Option<bool>,
     pub transaction_time: DateTime<Utc>,
     pub receipt_id: Option<String>,
     pub balance: Option<i64>,

@@ -1,9 +1,10 @@
 use super::model::{
-    Account, AccountKind, AccountMonitor, CreateAccount, MonoAccount, StatQueryParams,
+    Account, AccountKind, AccountMonitor, CreateAccount, MonoAccount, MonoClientInfo,
+    StatQueryParams,
 };
 use super::repository;
 use crate::error::AppError;
-use crate::utils::datetime::DateTimeUtc;
+use crate::utils::datetime::{DateTimeUtc, TimestampRange};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -11,72 +12,100 @@ use axum::http::header::USER_AGENT;
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 use tokio::task::JoinSet;
-use tokio::sync::Semaphore;
-use tokio::time::{sleep, Duration};
-use tracing::error;
+use tokio::time::{Duration, sleep};
+use tracing::{debug, error, info, instrument, warn};
 
 /// POST /bills/api/users/:idu/accounts
+#[instrument(skip(pool, payload))]
 pub async fn add_account(
     State(pool): State<SqlitePool>,
     Json(payload): Json<CreateAccount>,
 ) -> Result<(StatusCode, Json<Account>), AppError> {
+    debug!(idu = payload.idu, "Adding account");
     let account = repository::insert(payload.idu, payload.kind, payload.token, &pool).await?;
+    info!(ida = account.ida, "Account created");
     Ok((StatusCode::CREATED, Json(account)))
 }
 
 /// GET /bills/api/users/:idu/accounts
+#[instrument(skip(pool))]
 pub async fn get_accounts_by_idu(
     Path(idu): Path<u32>,
     State(pool): State<SqlitePool>,
 ) -> Result<Json<Vec<Account>>, AppError> {
+    debug!(idu, "Fetching accounts for user");
     let accounts = repository::find_by_idu(idu, &pool).await?;
+    debug!(count = accounts.len(), "Found accounts");
     Ok(Json(accounts))
 }
+// /// GET /bills/api/users/{idu}/monitors
+#[instrument(skip(pool))]
+pub async fn get_accounts_monitors(
+    Path(idu): Path<u32>,
+    State(pool): State<SqlitePool>,
+) -> Result<Json<Vec<AccountMonitor>>, AppError> {
+    debug!(idu, "Fetching monitors for user");
+    let monitors = repository::fetch_all_monitors_by_idu(idu, &pool).await?;
+    debug!(count = monitors.len(), "Found monitors");
+    Ok(Json(monitors))
+}
 
-/// PATCH /bills/api/users/:idu/accounts/stat
-pub async fn update_account_stat(
+/// PUT /bills/api/users/:idu/accounts/stat
+#[instrument(skip(pool, params))]
+pub async fn update_accounts_stat(
     Query(params): Query<StatQueryParams>,
     Path(idu): Path<u32>,
     State(pool): State<SqlitePool>,
 ) -> Result<(StatusCode, Json<Vec<AccountMonitor>>), AppError> {
+    info!(idu, from = %params.from, to = %params.to, "Updating account stat");
     sniff_accounts(&pool).await;
     let monitors = get_account_monitors_by_idu(idu, &pool).await?;
+    debug!("monitors_get_by_idu {:?}", &monitors);
     let monitors_for_response = monitors.clone();
 
     // Query params mapping: `from` = last_taken_date, `to` = updated_at
-    let DateTimeUtc(req_last_taken) = params.from.try_into()?;
-    let DateTimeUtc(req_updated_at) = params.to.try_into()?;
+    let DateTimeUtc(req_last_taken) = params.from.clone().try_into().map_err(|e| {
+        error!(idu = idu, from = %params.from, "Invalid 'from' datetime: {}", e);
+        AppError::BadRequest(e)
+    })?;
 
-    let monobank: Vec<AccountMonitor> = monitors.iter().filter(|m| m.kind == AccountKind::Mono).cloned().collect();
+    let DateTimeUtc(req_updated_at) = params.to.clone().try_into().map_err(|e| {
+        error!(idu = idu, to = %params.to, "Invalid 'to' datetime: {}", e);
+        AppError::BadRequest(e)
+    })?;
+
+    let monobank: Vec<AccountMonitor> = monitors
+        .iter()
+        .filter(|m| m.kind == AccountKind::Mono)
+        .cloned()
+        .collect();
 
     update_mono_accounts_stat(monobank, req_last_taken, req_updated_at, &pool).await;
 
     Ok((StatusCode::OK, Json(monitors_for_response)))
 }
 
-async fn update_mono_accounts_stat(monitors: Vec<AccountMonitor>, req_last_taken: DateTime<Utc>, req_updated_at: DateTime<Utc>, pool: &SqlitePool) {
-    use std::sync::Arc;
-    // concurrency limit for accounts
-    let sem = Arc::new(Semaphore::new(4));
-    let mut set: JoinSet<()> = JoinSet::new();
-
+async fn update_mono_accounts_stat(
+    monitors: Vec<AccountMonitor>,
+    req_last_taken: DateTime<Utc>,
+    req_updated_at: DateTime<Utc>,
+    pool: &SqlitePool,
+) {
     for monitor in monitors {
-        let sem = sem.clone();
-        let permit = sem.acquire_owned().await.unwrap();
+        // respect rate limit: wait 61s before next request for same account
+        // we sniff accounts before this fn, need to wait
+        info!(ida = monitor.ida, "Sleeping 60s to respect rate limits");
+        sleep(Duration::from_secs(61)).await;
+
         let pool = pool.clone();
-        let mon = monitor.clone();
         let f = req_last_taken.clone();
         let t = req_updated_at.clone();
 
-        set.spawn(async move {
-            let _p = permit; // keep permit until task ends
-            if let Err(e) = fetch_and_persist_account(&mon, f, t, &pool).await {
-                error!("Account ida={} failed: {:?}", mon.ida, e);
-            }
-        });
+        info!(ida = monitor.ida, external_id = %monitor.external_id, "Scheduling fetch for account");
+        if let Err(e) = fetch_and_persist_account(&monitor, f, t, &pool).await {
+            error!(ida = monitor.ida, ?e, "Account fetch and persist failed");
+        }
     }
-
-    while let Some(_) = set.join_next().await {}
 }
 
 /// Compute the missing time ranges to fetch from Monobank.
@@ -144,7 +173,9 @@ fn compute_missing_ranges(
     let mut cur = ranges[0];
     for &(s, e) in &ranges[1..] {
         if s <= cur.1 {
-            if e > cur.1 { cur.1 = e; }
+            if e > cur.1 {
+                cur.1 = e;
+            }
         } else {
             merged.push(cur);
             cur = (s, e);
@@ -173,6 +204,7 @@ fn split_into_chunks(
     chunks
 }
 
+#[instrument(skip(monitor, pool))]
 async fn fetch_and_persist_account(
     monitor: &AccountMonitor,
     from: DateTime<Utc>,
@@ -182,11 +214,17 @@ async fn fetch_and_persist_account(
     use super::model::{MonobankTransaction, NewBill};
     use reqwest::StatusCode as ReqStatus;
 
+    let external_id = monitor.external_id.clone();
+    info!(ida = monitor.ida, external_id = %&external_id, from = %from, to = %to, "Fetching account transactions");
+
     // compute ranges
     let ranges = compute_missing_ranges(from, to, monitor.updated_at, monitor.last_taken_date);
+    debug!(ida = monitor.ida, ranges = ?ranges, "Computed missing ranges");
     if ranges.is_empty() {
         // still update updated_at to now
-        repository::update_monitor_timestamps(monitor.ida, Utc::now(), None, pool).await?;
+        repository::update_monitor_timestamps(monitor.ida, external_id, Utc::now(), None, pool)
+            .await?;
+        info!(ida = monitor.ida, "No missing ranges, updated timestamps");
         return Ok(());
     }
 
@@ -194,25 +232,35 @@ async fn fetch_and_persist_account(
     let mut all_bills: Vec<NewBill> = Vec::new();
 
     // get token
-    let token = repository::get_token_by_ida(monitor.ida, pool).await.map_err(|e| {
-        error!("Failed to get token for ida={}: {}", monitor.ida, e);
-        AppError::Internal("failed to retrieve token".into())
-    })?;
+    let token = repository::get_token_by_ida(monitor.ida, pool)
+        .await
+        .map_err(|e| {
+            error!(ida = monitor.ida, ?e, "Failed to get token");
+            AppError::Internal("failed to retrieve token".into())
+        })?;
 
     let client = reqwest::Client::new();
     const MAX_SECONDS: i64 = 2_682_000; // 31 days + 1 hour
 
     for (rstart, rend) in ranges {
         let chunks = split_into_chunks(rstart, rend, MAX_SECONDS);
+        debug!(ida = monitor.ida, chunks = ?chunks, "Split into request chunks");
         for (cstart, cend) in chunks {
             // Monobank expects unix seconds
             let from_ts = cstart.timestamp();
             let to_ts = cend.timestamp();
-            let url = format!("https://api.monobank.ua/personal/statement/{}/{}/{}/", monitor.external_id, from_ts, to_ts);
+            let url = format!(
+                "https://api.monobank.ua/personal/statement/{}/{}/{}",
+                monitor.external_id.clone(),
+                from_ts,
+                to_ts
+            );
 
+            // if fail retry
             let mut attempts = 0u8;
             loop {
                 attempts += 1;
+                debug!(ida = monitor.ida, url = %url, attempt = attempts, "Requesting Monobank statement");
                 let resp = client
                     .get(&url)
                     .header("X-Token", &token)
@@ -222,10 +270,17 @@ async fn fetch_and_persist_account(
 
                 match resp {
                     Ok(r) if r.status().is_success() => {
+                        debug!(ida = monitor.ida, status = %r.status(), "Successful response");
                         let txs = r.json::<Vec<MonobankTransaction>>().await.map_err(|e| {
-                            error!("Failed to parse Monobank response ida={}: {}", monitor.ida, e);
+                            error!(ida = monitor.ida, ?e, "Failed to parse Monobank response");
                             AppError::Internal("failed to parse upstream response".into())
                         })?;
+
+                        debug!(
+                            ida = monitor.ida,
+                            tx_count = txs.len(),
+                            "Parsed transactions"
+                        );
 
                         for tx in txs {
                             let transaction_time = DateTime::<Utc>::from_timestamp(tx.time, 0)
@@ -233,6 +288,7 @@ async fn fetch_and_persist_account(
 
                             let nb = NewBill {
                                 id: tx.id,
+                                external_id: monitor.external_id.clone(),
                                 ida: monitor.ida,
                                 amount: tx.amount,
                                 currency_code: tx.currency_code,
@@ -241,30 +297,39 @@ async fn fetch_and_persist_account(
                                 hold: tx.hold,
                                 transaction_time,
                                 receipt_id: tx.receipt_id,
-                                balance: tx.balance,
+                                balance: Some(tx.balance),
                             };
+                            debug!(ida = monitor.ida, bill_id = %nb.id, amount = nb.amount, "Prepared NewBill");
                             all_bills.push(nb);
                         }
 
-                        // respect rate limit: wait 60s before next request for same account
-                        sleep(Duration::from_secs(60)).await;
+                        // respect rate limit: wait 61s before next request for same account
+                        info!(ida = monitor.ida, "Sleeping 60s to respect rate limits");
+                        sleep(Duration::from_secs(61)).await;
                         break;
                     }
                     Ok(r) if r.status() == ReqStatus::TOO_MANY_REQUESTS => {
+                        warn!(ida = monitor.ida, "Rate limited by Monobank, retrying");
                         if attempts >= 3 {
-                            error!("Too many requests for ida={}", monitor.ida);
+                            error!(ida = monitor.ida, "Too many requests, giving up");
                             break;
                         }
-                        sleep(Duration::from_secs(60)).await;
+                        sleep(Duration::from_secs(61)).await;
                         continue;
                     }
                     Ok(r) => {
-                        error!("Unexpected status {} for ida={}", r.status(), monitor.ida);
+                        error!(ida = monitor.ida, status = %r.status(), "Unexpected status from Monobank");
                         break;
                     }
                     Err(e) => {
+                        warn!(
+                            ida = monitor.ida,
+                            ?e,
+                            attempt = attempts,
+                            "HTTP request error, will retry"
+                        );
                         if attempts >= 3 {
-                            error!("Request failed for ida={} after {} attempts: {}", monitor.ida, attempts, e);
+                            error!(ida = monitor.ida, ?e, "Request failed after retries");
                             break;
                         }
                         // backoff
@@ -277,24 +342,46 @@ async fn fetch_and_persist_account(
     }
 
     // persist bills
-    repository::insert_bills(&all_bills, pool).await.map_err(|e| {
-        error!("Failed to insert bills for ida={}: {}", monitor.ida, e);
-        AppError::Internal("failed to persist bills".into())
-    })?;
+    info!(
+        ida = monitor.ida,
+        bill_count = all_bills.len(),
+        "Persisting bills"
+    );
+    repository::insert_bills(&all_bills, pool)
+        .await
+        .map_err(|e| {
+            error!(ida = monitor.ida, ?e, "Failed to insert bills");
+            AppError::Internal("failed to persist bills".into())
+        })?;
 
     // update monitor timestamps per rules: updated_at = now, last_taken_date = from if from < last_taken_date
     let now = Utc::now();
     let mut maybe_lt: Option<DateTime<Utc>> = None;
     if let Some(ltd) = monitor.last_taken_date {
-        if from > ltd {
+        if from < ltd {
             maybe_lt = Some(from);
         }
+    } else {
+        maybe_lt = Some(from);
     }
 
-    repository::update_monitor_timestamps(monitor.ida, now, maybe_lt, pool).await.map_err(|e| {
-        error!("Failed to update monitor timestamps for ida={}: {}", monitor.ida, e);
+    repository::update_monitor_timestamps(
+        monitor.ida,
+        monitor.external_id.clone(),
+        now,
+        maybe_lt,
+        pool,
+    )
+    .await
+    .map_err(|e| {
+        error!(ida = monitor.ida, ?e, "Failed to update monitor timestamps");
         AppError::Internal("failed to update monitor timestamps".into())
     })?;
+
+    info!(
+        ida = monitor.ida,
+        "fetch_and_persist_account completed successfully"
+    );
 
     Ok(())
 }
@@ -319,7 +406,7 @@ async fn sniff_monobank_accounts(accounts: impl Iterator<Item = Account>, pool: 
 
         set.spawn(async move {
             let client = reqwest::Client::new();
-            let mut mono_accounts = client
+            let info = client
                 .get(MONO_CLIENT_INFO_URL)
                 .header("X-Token", &token)
                 .header(USER_AGENT, "Local bills")
@@ -329,13 +416,14 @@ async fn sniff_monobank_accounts(accounts: impl Iterator<Item = Account>, pool: 
                     error!("Monobank request error for ida={}: {}", ida, e);
                     "upstream request failed".to_string()
                 })?
-                .json::<Vec<MonoAccount>>()
+                .json::<MonoClientInfo>()
                 .await
                 .map_err(|e| {
                     error!("Monobank deserialize error for ida={}: {}", ida, e);
                     "upstream response parse failed".to_string()
                 })?;
 
+            let mut mono_accounts = info.accounts;
             for a in mono_accounts.iter_mut() {
                 a.ida = ida;
             }
@@ -346,7 +434,8 @@ async fn sniff_monobank_accounts(accounts: impl Iterator<Item = Account>, pool: 
     while let Some(res) = set.join_next().await {
         match res {
             Ok(Ok(mono_accounts)) => {
-                if let Err(e) = repository::insert_mono_accounts_monitor(&mono_accounts, pool).await {
+                if let Err(e) = repository::insert_mono_accounts_monitor(&mono_accounts, pool).await
+                {
                     error!("Failed to persist account monitors: {}", e);
                 }
             }
@@ -361,5 +450,5 @@ async fn get_account_monitors_by_idu(
     idu: u32,
     pool: &SqlitePool,
 ) -> Result<Vec<AccountMonitor>, sqlx::Error> {
-    repository::find_all_monitors_by_idu(idu, pool).await
+    repository::fetch_all_monitors_by_idu(idu, pool).await
 }

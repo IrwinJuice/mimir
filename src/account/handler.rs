@@ -64,9 +64,9 @@ pub async fn update_accounts_stat(
     State(ws_tx): State<WsTx>,
 ) -> Result<(StatusCode, Json<Vec<AccountMonitor>>), AppError> {
     info!(idu, from = %params.from, to = %params.to, "Updating account stat");
-    //
-    // // Return the user-provided JSON as typed response (constructed manually so we don't touch comments)
-    // let monitors_for_response: Vec<AccountMonitor> = vec![
+    // // MOCK test
+    // // // Return the user-provided JSON as typed response (constructed manually so we don't touch comments)
+    // let monitors: Vec<AccountMonitor> = vec![
     //     AccountMonitor {
     //         ida: 1,
     //         external_id: "JQzeEVplrSlv9f7sh9hFLw".to_string(),
@@ -133,7 +133,24 @@ pub async fn update_accounts_stat(
     //         status: AccountMonitorStatus::Never,
     //     },
     // ];
-
+    //
+    //
+    // let monitors_for_response = monitors.clone();
+    //
+    // tokio::spawn(async move {
+    //
+    //     sleep(Duration::from_secs(10)).await;
+    //     monitors.iter().for_each(|monitor| {
+    //
+    //         let msg = format!(
+    //             r#"{{"event":"monitor_pending","ida":{},"external_id":"{}","masked_pan":"{}"}}"#,
+    //             monitor.ida, monitor.external_id, monitor.masked_pan
+    //         );
+    //         if let Err(e) = ws_tx.send(msg) {
+    //             warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
+    //         }
+    //     });
+    // });
 
     sniff_accounts(&pool).await;
     let monitors = get_account_monitors_by_idu(idu, &pool).await?;
@@ -172,14 +189,29 @@ async fn update_mono_accounts_stat(
     pool: &SqlitePool,
     ws_tx: &WsTx,
 ) {
+    info!(
+        "Sleeping 2s to end http call with monitors, to prevent racing condition when monitor is still undefined, but ws event has already arrived."
+    );
+    sleep(Duration::from_secs(2)).await;
     for monitor in monitors {
-        let msg = format!(
-            r#"{{"event":"monitor_pending","ida":{},"external_id":"{}","masked_pan":"{}"}}"#,
-            monitor.ida, monitor.external_id, monitor.masked_pan
-        );
-        if let Err(e) = ws_tx.send(msg) {
-            warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
-        }
+        // MOCK for test
+        // let msg = format!(
+        //     r#"{{"event":"monitor_pending","ida":{},"external_id":"{}","masked_pan":"{}"}}"#,
+        //     monitor.ida, monitor.external_id, monitor.masked_pan
+        // );
+        // if let Err(e) = ws_tx.send(msg) {
+        //     warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
+        // }
+        //
+        // sleep(Duration::from_secs(5)).await;
+        //
+        // let msg = format!(
+        //     r#"{{"event":"monitor_updated","ida":{},"external_id":"{}","masked_pan":"{}"}}"#,
+        //     monitor.ida, monitor.external_id, monitor.masked_pan
+        // );
+        // if let Err(e) = ws_tx.send(msg) {
+        //     warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
+        // }
 
         if let Err(e) = update_monitor_status(
             monitor.ida,
@@ -203,7 +235,9 @@ async fn update_mono_accounts_stat(
         sleep(Duration::from_secs(61)).await;
 
         info!(ida = monitor.ida, external_id = %monitor.external_id, "Scheduling fetch for account");
-        if let Err(e) = fetch_and_persist_account(&monitor, req_last_taken, req_updated_at, &pool).await {
+        if let Err(e) =
+            fetch_and_persist_account(&monitor, req_last_taken, req_updated_at, &pool).await
+        {
             error!(ida = monitor.ida, ?e, "Account fetch and persist failed");
         }
 
@@ -213,7 +247,7 @@ async fn update_mono_accounts_stat(
             AccountMonitorStatus::Updated,
             &pool,
         )
-            .await
+        .await
         {
             error!(
                 ida = monitor.ida,

@@ -99,35 +99,3 @@ pub struct StatQueryParams {
     pub to: i64,
 }
 
-// ------------------ Monobank transaction DTO ------------------
-/// Minimal Monobank transaction structure used for mapping to `bills`.
-#[derive(Deserialize, Debug)]
-pub struct MonobankTransaction {
-    pub id: String,
-    pub time: i64, // seconds since epoch
-    pub description: Option<String>,
-    pub mcc: Option<i32>,
-    pub hold: Option<bool>,
-    pub amount: i64,
-    #[serde(rename = "currencyCode")]
-    pub currency_code: i32,
-    pub balance: i64,
-    #[serde(rename = "receiptId")]
-    pub receipt_id: Option<String>,
-}
-
-// ------------------ NewBill DTO ------------------
-#[derive(Debug)]
-pub struct NewBill {
-    pub id: String,
-    pub external_id: String,
-    pub ida: u32,
-    pub amount: i64,
-    pub currency_code: i32,
-    pub description: Option<String>,
-    pub mcc: Option<i32>,
-    pub hold: Option<bool>,
-    pub transaction_time: DateTime<Utc>,
-    pub receipt_id: Option<String>,
-    pub balance: Option<i64>,
-}

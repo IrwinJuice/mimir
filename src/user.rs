@@ -22,7 +22,7 @@ pub async fn create_user(
     Json(payload): Json<CreateUser>,
 ) -> Result<(StatusCode, Json<User>), AppError> {
     let user = sqlx::query_as::<Sqlite, User>(
-        "INSERT INTO users (name) VALUES ($1) RETURNING idu, name",
+        "INSERT INTO suser (name) VALUES ($1) RETURNING idu, name"
     )
     .bind(payload.name)
     .fetch_one(&pool)
@@ -34,7 +34,7 @@ pub async fn create_user(
 pub async fn get_users(
     State(pool): State<SqlitePool>,
 ) -> Result<Json<Vec<User>>, AppError> {
-    let users = sqlx::query_as::<Sqlite, User>("SELECT idu, name from users")
+    let users = sqlx::query_as::<Sqlite, User>("SELECT idu, name from suser")
         .fetch_all(&pool)
         .await?;
     Ok(Json(users))

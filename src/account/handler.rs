@@ -5,6 +5,7 @@ use super::model::{
 use super::repository;
 use crate::error::AppError;
 use crate::utils::datetime::{DateTimeUtc, TimestampRange};
+use crate::ws_handler::WsTx;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -14,6 +15,8 @@ use sqlx::SqlitePool;
 use tokio::task::JoinSet;
 use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, instrument, warn};
+use crate::transaction;
+use crate::transaction::{MonobankTransaction, BankTransaction};
 
 /// POST /bills/api/users/:idu/accounts
 #[instrument(skip(pool, payload))]
@@ -38,7 +41,8 @@ pub async fn get_accounts_by_idu(
     debug!(count = accounts.len(), "Found accounts");
     Ok(Json(accounts))
 }
-// /// GET /bills/api/users/{idu}/monitors
+
+/// GET /bills/api/users/{idu}/monitors
 #[instrument(skip(pool))]
 pub async fn get_accounts_monitors(
     Path(idu): Path<u32>,
@@ -51,16 +55,18 @@ pub async fn get_accounts_monitors(
 }
 
 /// PUT /bills/api/users/:idu/accounts/stat
-#[instrument(skip(pool, params))]
+#[instrument(skip(pool, params, ws_tx))]
 pub async fn update_accounts_stat(
     Query(params): Query<StatQueryParams>,
     Path(idu): Path<u32>,
     State(pool): State<SqlitePool>,
+    State(ws_tx): State<WsTx>,
 ) -> Result<(StatusCode, Json<Vec<AccountMonitor>>), AppError> {
     info!(idu, from = %params.from, to = %params.to, "Updating account stat");
     sniff_accounts(&pool).await;
     let monitors = get_account_monitors_by_idu(idu, &pool).await?;
     debug!("monitors_get_by_idu {:?}", &monitors);
+
     let monitors_for_response = monitors.clone();
 
     // Query params mapping: `from` = last_taken_date, `to` = updated_at
@@ -74,13 +80,16 @@ pub async fn update_accounts_stat(
         AppError::BadRequest(e)
     })?;
 
-    let monobank: Vec<AccountMonitor> = monitors
-        .iter()
-        .filter(|m| m.kind == AccountKind::Mono)
-        .cloned()
-        .collect();
+    // Spawn background task
+    tokio::spawn(async move {
+        let monobank: Vec<AccountMonitor> = monitors
+            .iter()
+            .filter(|m| m.kind == AccountKind::Mono)
+            .cloned()
+            .collect();
 
-    update_mono_accounts_stat(monobank, req_last_taken, req_updated_at, &pool).await;
+        update_mono_accounts_stat(monobank, req_last_taken, req_updated_at, &pool, &ws_tx).await;
+    });
 
     Ok((StatusCode::OK, Json(monitors_for_response)))
 }
@@ -90,6 +99,7 @@ async fn update_mono_accounts_stat(
     req_last_taken: DateTime<Utc>,
     req_updated_at: DateTime<Utc>,
     pool: &SqlitePool,
+    ws_tx: &WsTx,
 ) {
     for monitor in monitors {
         // respect rate limit: wait 61s before next request for same account
@@ -102,9 +112,11 @@ async fn update_mono_accounts_stat(
         let t = req_updated_at.clone();
 
         info!(ida = monitor.ida, external_id = %monitor.external_id, "Scheduling fetch for account");
-        if let Err(e) = fetch_and_persist_account(&monitor, f, t, &pool).await {
+        if let Err(e) = fetch_and_persist_account(&monitor, f, t, &pool, ws_tx).await {
             error!(ida = monitor.ida, ?e, "Account fetch and persist failed");
         }
+
+
     }
 }
 
@@ -204,14 +216,14 @@ fn split_into_chunks(
     chunks
 }
 
-#[instrument(skip(monitor, pool))]
+#[instrument(skip(monitor, pool, ws_tx))]
 async fn fetch_and_persist_account(
     monitor: &AccountMonitor,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
     pool: &SqlitePool,
+    ws_tx: &WsTx,
 ) -> Result<(), AppError> {
-    use super::model::{MonobankTransaction, NewBill};
     use reqwest::StatusCode as ReqStatus;
 
     let external_id = monitor.external_id.clone();
@@ -229,7 +241,7 @@ async fn fetch_and_persist_account(
     }
 
     // collect bills to insert
-    let mut all_bills: Vec<NewBill> = Vec::new();
+    let mut all_bills: Vec<BankTransaction> = Vec::new();
 
     // get token
     let token = repository::get_token_by_ida(monitor.ida, pool)
@@ -286,7 +298,7 @@ async fn fetch_and_persist_account(
                             let transaction_time = DateTime::<Utc>::from_timestamp(tx.time, 0)
                                 .unwrap_or_else(Utc::now);
 
-                            let nb = NewBill {
+                            let nb = BankTransaction {
                                 id: tx.id,
                                 external_id: monitor.external_id.clone(),
                                 ida: monitor.ida,
@@ -347,12 +359,12 @@ async fn fetch_and_persist_account(
         bill_count = all_bills.len(),
         "Persisting bills"
     );
-    repository::insert_bills(&all_bills, pool)
-        .await
-        .map_err(|e| {
-            error!(ida = monitor.ida, ?e, "Failed to insert bills");
-            AppError::Internal("failed to persist bills".into())
-        })?;
+    transaction::repository::insert_transactions(&all_bills, pool)
+         .await
+         .map_err(|e| {
+             error!(ida = monitor.ida, ?e, "Failed to insert bills");
+             AppError::Internal("failed to persist bills".into())
+         })?;
 
     // update monitor timestamps per rules: updated_at = now, last_taken_date = from if from < last_taken_date
     let now = Utc::now();
@@ -382,6 +394,14 @@ async fn fetch_and_persist_account(
         ida = monitor.ida,
         "fetch_and_persist_account completed successfully"
     );
+
+    let msg = format!(
+        r#"{{"event":"transactions_updated","ida":{},"external_id":"{}"}}"#,
+        monitor.ida, monitor.external_id
+    );
+    if let Err(e) = ws_tx.send(msg) {
+        warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
+    }
 
     Ok(())
 }

@@ -1,20 +1,45 @@
 mod account;
 mod error;
 mod tracing_config;
+pub mod transaction;
 mod user;
 mod utils;
+mod ws_handler;
 
-use crate::account::handler::{add_account, get_accounts_by_idu, get_accounts_monitors, update_accounts_stat};
+use crate::account::handler::{
+    add_account, get_accounts_by_idu, get_accounts_monitors, update_accounts_stat,
+};
 use crate::user::{create_user, get_users};
-use axum::http::{header, HeaderValue, Method};
-use axum::routing::{get, get_service, put};
 use axum::Router;
+use axum::extract::FromRef;
+use axum::http::{HeaderValue, Method, header};
+use axum::routing::{any, get, get_service, put};
 use sqlx::SqlitePool;
 use std::fs::File;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::{debug, info};
 use tracing_log::LogTracer;
+use crate::transaction::handler::get_transactions_by_ida;
+use crate::ws_handler::{handle_socket, WsTx};
+
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: SqlitePool,
+    pub ws_tx: WsTx,
+}
+
+impl FromRef<AppState> for SqlitePool {
+    fn from_ref(state: &AppState) -> Self {
+        state.pool.clone()
+    }
+}
+
+impl FromRef<AppState> for WsTx {
+    fn from_ref(state: &AppState) -> Self {
+        state.ws_tx.clone()
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -32,6 +57,8 @@ async fn main() {
     debug!("Running database migrations");
     sqlx::migrate!().run(&pool).await.unwrap();
     info!("Database connected and migrations applied");
+
+    let (ws_tx, _) = tokio::sync::broadcast::channel::<String>(64);
 
     // Serve Angular app from the dist folder, falling back to index.html for SPA routing
     let serve_dir = ServeDir::new("./dist/bills-client/browser")
@@ -53,9 +80,14 @@ async fn main() {
             put(update_accounts_stat),
         )
         .route(
+            "/bills/api/users/{idu}/accounts/{ida}/transactions",
+            get(get_transactions_by_ida),
+        )
+        .route(
             "/bills/api/users/{idu}/monitors",
             get(get_accounts_monitors),
         )
+        .route("/ws", any(handle_socket))
         // Serve the Angular SPA under /bills
         .nest_service("/bills", serve_dir.clone())
         .fallback_service(get_service(serve_dir.clone()))
@@ -71,13 +103,11 @@ async fn main() {
                 ])
                 .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]),
         )
-        .with_state(pool.clone());
+        .with_state(AppState { pool, ws_tx });
 
     let bind_addr = "0.0.0.0:42000";
     info!(%bind_addr, "Binding TCP listener");
-    let listener = tokio::net::TcpListener::bind(bind_addr)
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind(bind_addr).await.unwrap();
     info!("Server started and listening");
     axum::serve(listener, app).await.unwrap();
 }

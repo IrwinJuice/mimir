@@ -194,24 +194,13 @@ async fn update_mono_accounts_stat(
     );
     sleep(Duration::from_secs(2)).await;
     for monitor in monitors {
-        // MOCK for test
-        // let msg = format!(
-        //     r#"{{"event":"monitor_pending","ida":{},"external_id":"{}","masked_pan":"{}"}}"#,
-        //     monitor.ida, monitor.external_id, monitor.masked_pan
-        // );
-        // if let Err(e) = ws_tx.send(msg) {
-        //     warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
-        // }
-        //
-        // sleep(Duration::from_secs(5)).await;
-        //
-        // let msg = format!(
-        //     r#"{{"event":"monitor_updated","ida":{},"external_id":"{}","masked_pan":"{}"}}"#,
-        //     monitor.ida, monitor.external_id, monitor.masked_pan
-        // );
-        // if let Err(e) = ws_tx.send(msg) {
-        //     warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
-        // }
+        let msg = format!(
+            r#"{{"event":"monitor_pending","ida":{},"external_id":"{}","masked_pan":"{}"}}"#,
+            monitor.ida, monitor.external_id, monitor.masked_pan
+        );
+        if let Err(e) = ws_tx.send(msg) {
+            warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
+        }
 
         if let Err(e) = update_monitor_status(
             monitor.ida,

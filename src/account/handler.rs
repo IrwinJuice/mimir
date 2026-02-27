@@ -45,6 +45,26 @@ pub async fn get_accounts_by_idu(
 
 /// GET /bills/api/users/{idu}/monitors
 #[instrument(skip(pool))]
+pub async fn get_account_monitor(
+    Path((_, external_id)): Path<(u32,String)>,
+    State(pool): State<SqlitePool>,
+) -> Result<Json<AccountMonitor>, AppError> {
+    debug!(external_id, "Fetching monitor by external_id");
+    match repository::fetch_monitor_by_external_id(&external_id, &pool).await? {
+        Some(monitor) => {
+            debug!("Found monitor");
+            Ok(Json(monitor))
+        }
+        None => {
+            let message = format!("Not Found monitor with external_id {external_id}");
+            Err(AppError::NotFound(message))
+        }
+    }
+
+}
+
+/// GET /bills/api/users/{idu}/monitors
+#[instrument(skip(pool))]
 pub async fn get_accounts_monitors(
     Path(idu): Path<u32>,
     State(pool): State<SqlitePool>,
@@ -133,28 +153,14 @@ pub async fn update_accounts_stat(
     //         status: AccountMonitorStatus::Never,
     //     },
     // ];
-    //
-    //
-    // let monitors_for_response = monitors.clone();
-    //
-    // tokio::spawn(async move {
-    //
-    //     sleep(Duration::from_secs(10)).await;
-    //     monitors.iter().for_each(|monitor| {
-    //
-    //         let msg = format!(
-    //             r#"{{"event":"monitor_pending","ida":{},"external_id":"{}","masked_pan":"{}"}}"#,
-    //             monitor.ida, monitor.external_id, monitor.masked_pan
-    //         );
-    //         if let Err(e) = ws_tx.send(msg) {
-    //             warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
-    //         }
-    //     });
-    // });
+
+
 
     sniff_accounts(&pool).await;
     let monitors = get_account_monitors_by_idu(idu, &pool).await?;
+
     debug!("monitors_get_by_idu {:?}", &monitors);
+
     let monitors_for_response = monitors.clone();
 
     // Query params mapping: `from` = last_taken_date, `to` = updated_at
@@ -194,13 +200,6 @@ async fn update_mono_accounts_stat(
     );
     sleep(Duration::from_secs(2)).await;
     for monitor in monitors {
-        let msg = format!(
-            r#"{{"event":"monitor_pending","ida":{},"external_id":"{}","masked_pan":"{}"}}"#,
-            monitor.ida, monitor.external_id, monitor.masked_pan
-        );
-        if let Err(e) = ws_tx.send(msg) {
-            warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
-        }
 
         if let Err(e) = update_monitor_status(
             monitor.ida,
@@ -218,10 +217,14 @@ async fn update_mono_accounts_stat(
             );
         }
 
-        // respect rate limit: wait 61s before next request for same account
-        // we sniff accounts before this fn, need to wait
-        info!(ida = monitor.ida, "Sleeping 60s to respect rate limits");
-        sleep(Duration::from_secs(61)).await;
+        let msg = format!(
+            r#"{{"event":"monitor_pending","ida":{},"external_id":"{}","masked_pan":"{}"}}"#,
+            monitor.ida, monitor.external_id, monitor.masked_pan
+        );
+        if let Err(e) = ws_tx.send(msg) {
+            warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
+        }
+
 
         info!(ida = monitor.ida, external_id = %monitor.external_id, "Scheduling fetch for account");
         if let Err(e) =
@@ -374,7 +377,7 @@ async fn fetch_and_persist_account(
     debug!(ida = monitor.ida, ranges = ?ranges, "Computed missing ranges");
     if ranges.is_empty() {
         // still update updated_at to now
-        repository::update_monitor_timestamps(monitor.ida, external_id, Utc::now(), None, pool)
+        repository::update_monitor_timestamps(monitor.ida, &external_id, Utc::now(), None, pool)
             .await?;
         info!(ida = monitor.ida, "No missing ranges, updated timestamps");
         return Ok(());
@@ -411,6 +414,10 @@ async fn fetch_and_persist_account(
             // if fail retry
             let mut attempts = 0u8;
             loop {
+                // respect rate limit: wait 61s before next request for same account
+                info!(ida = monitor.ida, "Sleeping 60s to respect rate limits");
+                sleep(Duration::from_secs(61)).await;
+
                 attempts += 1;
                 debug!(ida = monitor.ida, url = %url, attempt = attempts, "Requesting Monobank statement");
                 let resp = client
@@ -455,9 +462,6 @@ async fn fetch_and_persist_account(
                             all_bills.push(nb);
                         }
 
-                        // respect rate limit: wait 61s before next request for same account
-                        info!(ida = monitor.ida, "Sleeping 60s to respect rate limits");
-                        sleep(Duration::from_secs(61)).await;
                         break;
                     }
                     Ok(r) if r.status() == ReqStatus::TOO_MANY_REQUESTS => {
@@ -466,7 +470,6 @@ async fn fetch_and_persist_account(
                             error!(ida = monitor.ida, "Too many requests, giving up");
                             break;
                         }
-                        sleep(Duration::from_secs(61)).await;
                         continue;
                     }
                     Ok(r) => {
@@ -485,7 +488,6 @@ async fn fetch_and_persist_account(
                             break;
                         }
                         // backoff
-                        sleep(Duration::from_millis(500 * (attempts as u64))).await;
                         continue;
                     }
                 }
@@ -519,7 +521,7 @@ async fn fetch_and_persist_account(
 
     repository::update_monitor_timestamps(
         monitor.ida,
-        monitor.external_id.clone(),
+        &monitor.external_id,
         now,
         maybe_lt,
         pool,

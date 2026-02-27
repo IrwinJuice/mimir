@@ -6,9 +6,7 @@ mod user;
 mod utils;
 mod ws_handler;
 
-use crate::account::handler::{
-    add_account, get_accounts_by_idu, get_accounts_monitors, update_accounts_stat,
-};
+use crate::account::handler::{add_account, get_account_monitor, get_accounts_by_idu, get_accounts_monitors, update_accounts_stat};
 use crate::user::{create_user, get_users};
 use axum::Router;
 use axum::extract::FromRef;
@@ -86,6 +84,10 @@ async fn main() {
         .route(
             "/bills/api/users/{idu}/monitors",
             get(get_accounts_monitors),
+        )
+        .route(
+            "/bills/api/users/{idu}/monitors/{external_id}",
+            get(get_account_monitor),
         )
         .route("/bills/ws", any(handle_socket))
         // Serve the Angular SPA under /bills

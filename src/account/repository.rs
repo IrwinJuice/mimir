@@ -129,7 +129,7 @@ pub async fn update_monitor_status(
 /// Update accounts_monitor timestamps after successful fetch
 pub async fn update_monitor_timestamps(
     ida: u32,
-    external_id: String,
+    external_id: &str,
     updated_at: DateTime<Utc>,
     maybe_last_taken_date: Option<DateTime<Utc>>,
     pool: &SqlitePool,
@@ -155,4 +155,18 @@ pub async fn update_monitor_timestamps(
         .await
         .map(|_| ())
     }
+}
+
+pub async fn fetch_monitor_by_external_id(
+    external_id: &str,
+    pool: &SqlitePool,
+) -> Result<Option<AccountMonitor>, sqlx::Error> {
+    debug!(%external_id, "Selecting account monitor by external_id");
+    sqlx::query_as::<Sqlite, AccountMonitor>(
+        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, updated_at, last_taken_date, status
+        FROM bank_account_monitor where external_id = $1",
+    )
+        .bind(external_id)
+        .fetch_optional(pool)
+        .await
 }

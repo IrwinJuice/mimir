@@ -1,8 +1,8 @@
-use sqlx::{Sqlite, SqlitePool};
 use sqlx::types::chrono::{DateTime, Utc};
-use tracing::{error, debug, info};
+use sqlx::{Sqlite, SqlitePool};
+use tracing::{debug, error, info};
 
-use super::model::{Account, AccountKind, AccountMonitor, MonoAccount};
+use super::model::{Account, AccountKind, AccountMonitor, AccountMonitorStatus, MonoAccount};
 
 /// Fetch every account row from the DB.
 pub async fn find_all(pool: &SqlitePool) -> Vec<Account> {
@@ -19,10 +19,12 @@ pub async fn find_all(pool: &SqlitePool) -> Vec<Account> {
 /// Fetch all accounts belonging to a specific user.
 pub async fn find_by_idu(idu: u32, pool: &SqlitePool) -> Result<Vec<Account>, sqlx::Error> {
     debug!(%idu, "Selecting accounts by idu");
-    sqlx::query_as::<Sqlite, Account>("SELECT ida, idu, kind, token FROM bank_account WHERE idu = $1")
-        .bind(idu)
-        .fetch_all(pool)
-        .await
+    sqlx::query_as::<Sqlite, Account>(
+        "SELECT ida, idu, kind, token FROM bank_account WHERE idu = $1",
+    )
+    .bind(idu)
+    .fetch_all(pool)
+    .await
 }
 
 /// Insert a new account row and return the created record.
@@ -53,13 +55,16 @@ pub async fn insert_mono_accounts_monitor(
         return Ok(());
     }
 
-    debug!(count = accounts.len(), "Inserting mono accounts into accounts_monitor");
+    debug!(
+        count = accounts.len(),
+        "Inserting mono accounts into accounts_monitor"
+    );
 
     for account in accounts {
         debug!(external_id = %account.id, ida = account.ida, "Inserting monitor row");
         sqlx::query(
-            "INSERT INTO bank_account_monitor (ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+            "INSERT INTO bank_account_monitor (ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, status) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(external_id) DO NOTHING",
         )
         .bind(account.ida)
@@ -70,6 +75,7 @@ pub async fn insert_mono_accounts_monitor(
         .bind(&account.iban)
         .bind(account.masked_pan.join(","))
         .bind("Mono")
+        .bind(AccountMonitorStatus::Never.to_string())
         .execute(pool)
         .await?;
     }
@@ -85,7 +91,7 @@ pub async fn fetch_all_monitors_by_idu(
 ) -> Result<Vec<AccountMonitor>, sqlx::Error> {
     debug!(%idu, "Selecting account monitors by user id");
     sqlx::query_as::<Sqlite, AccountMonitor>(
-        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, updated_at, last_taken_date
+        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, updated_at, last_taken_date, status
         FROM bank_account_monitor where ida in (
             select ida from bank_account where idu = $1)",
     )
@@ -104,6 +110,22 @@ pub async fn get_token_by_ida(ida: u32, pool: &SqlitePool) -> Result<String, sql
     Ok(token)
 }
 
+/// Update accounts_monitor status
+pub async fn update_monitor_status(
+    ida: u32,
+    external_id: String,
+    status: AccountMonitorStatus,
+    pool: &SqlitePool,
+) -> Result<(), sqlx::Error> {
+    debug!(ida, "Updating monitor status");
+    sqlx::query("UPDATE bank_account_monitor SET status = ? WHERE ida = ? and external_id = ?")
+        .bind(status.to_string())
+        .bind(ida)
+        .bind(external_id)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
 /// Update accounts_monitor timestamps after successful fetch
 pub async fn update_monitor_timestamps(
     ida: u32,
@@ -123,12 +145,14 @@ pub async fn update_monitor_timestamps(
             .await
             .map(|_| ())
     } else {
-        sqlx::query("UPDATE bank_account_monitor SET updated_at = ? WHERE ida = ? and external_id = ?")
-            .bind(updated_at)
-            .bind(ida)
-            .bind(external_id)
-            .execute(pool)
-            .await
-            .map(|_| ())
+        sqlx::query(
+            "UPDATE bank_account_monitor SET updated_at = ? WHERE ida = ? and external_id = ?",
+        )
+        .bind(updated_at)
+        .bind(ida)
+        .bind(external_id)
+        .execute(pool)
+        .await
+        .map(|_| ())
     }
 }

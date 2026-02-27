@@ -87,9 +87,9 @@ async fn main() {
             "/bills/api/users/{idu}/monitors",
             get(get_accounts_monitors),
         )
-        .route("/ws", any(handle_socket))
+        .route("/bills/ws", any(handle_socket))
         // Serve the Angular SPA under /bills
-        .nest_service("/bills", serve_dir.clone())
+        .nest_service("/transactions", serve_dir.clone())
         .fallback_service(get_service(serve_dir.clone()))
         .layer(
             CorsLayer::new()

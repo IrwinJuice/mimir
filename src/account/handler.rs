@@ -1,9 +1,12 @@
 use super::model::{
-    Account, AccountKind, AccountMonitor, CreateAccount, MonoAccount, MonoClientInfo,
-    StatQueryParams,
+    Account, AccountKind, AccountMonitor, AccountMonitorStatus, CreateAccount, MonoAccount,
+    MonoClientInfo, StatQueryParams,
 };
 use super::repository;
+use crate::account::repository::update_monitor_status;
 use crate::error::AppError;
+use crate::transaction;
+use crate::transaction::{BankTransaction, MonobankTransaction};
 use crate::utils::datetime::{DateTimeUtc, TimestampRange};
 use crate::ws_handler::WsTx;
 use axum::Json;
@@ -15,8 +18,6 @@ use sqlx::SqlitePool;
 use tokio::task::JoinSet;
 use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, instrument, warn};
-use crate::transaction;
-use crate::transaction::{MonobankTransaction, BankTransaction};
 
 /// POST /bills/api/users/:idu/accounts
 #[instrument(skip(pool, payload))]
@@ -63,10 +64,80 @@ pub async fn update_accounts_stat(
     State(ws_tx): State<WsTx>,
 ) -> Result<(StatusCode, Json<Vec<AccountMonitor>>), AppError> {
     info!(idu, from = %params.from, to = %params.to, "Updating account stat");
+    //
+    // // Return the user-provided JSON as typed response (constructed manually so we don't touch comments)
+    // let monitors_for_response: Vec<AccountMonitor> = vec![
+    //     AccountMonitor {
+    //         ida: 1,
+    //         external_id: "JQzeEVplrSlv9f7sh9hFLw".to_string(),
+    //         currency_code: 980,
+    //         balance: 1664,
+    //         credit_limit: 0,
+    //         iban: "UA563220010000026202351168494".to_string(),
+    //         masked_pan: "444111******5014".to_string(),
+    //         kind: AccountKind::Mono,
+    //         updated_at: None,
+    //         last_taken_date: None,
+    //         status: AccountMonitorStatus::Pending,
+    //     },
+    //     AccountMonitor {
+    //         ida: 1,
+    //         external_id: "j2ft-PJ0LDors9INaNMcgw".to_string(),
+    //         currency_code: 840,
+    //         balance: 9424,
+    //         credit_limit: 0,
+    //         iban: "UA773220010000026206330587199".to_string(),
+    //         masked_pan: "444111******4069".to_string(),
+    //         kind: AccountKind::Mono,
+    //         updated_at: None,
+    //         last_taken_date: None,
+    //         status: AccountMonitorStatus::Never,
+    //     },
+    //     AccountMonitor {
+    //         ida: 1,
+    //         external_id: "Vb2IecNJleJpaf68itjujQ".to_string(),
+    //         currency_code: 980,
+    //         balance: 592970,
+    //         credit_limit: 100000,
+    //         iban: "UA743220010000026201303310150".to_string(),
+    //         masked_pan: "444111******3308".to_string(),
+    //         kind: AccountKind::Mono,
+    //         updated_at: None,
+    //         last_taken_date: None,
+    //         status: AccountMonitorStatus::Never,
+    //     },
+    //     AccountMonitor {
+    //         ida: 1,
+    //         external_id: "9e0PiuTyuEix2kVUbq4sbg".to_string(),
+    //         currency_code: 980,
+    //         balance: 30911932,
+    //         credit_limit: 0,
+    //         iban: "UA213220010000026204307220975".to_string(),
+    //         masked_pan: "444111******4488".to_string(),
+    //         kind: AccountKind::Mono,
+    //         updated_at: None,
+    //         last_taken_date: None,
+    //         status: AccountMonitorStatus::Never,
+    //     },
+    //     AccountMonitor {
+    //         ida: 1,
+    //         external_id: "dy8oAcqW4ngR5Wy_SPO-kA".to_string(),
+    //         currency_code: 980,
+    //         balance: 0,
+    //         credit_limit: 0,
+    //         iban: "UA373220010000026200320095051".to_string(),
+    //         masked_pan: "444111******1497".to_string(),
+    //         kind: AccountKind::Mono,
+    //         updated_at: None,
+    //         last_taken_date: None,
+    //         status: AccountMonitorStatus::Never,
+    //     },
+    // ];
+
+
     sniff_accounts(&pool).await;
     let monitors = get_account_monitors_by_idu(idu, &pool).await?;
     debug!("monitors_get_by_idu {:?}", &monitors);
-
     let monitors_for_response = monitors.clone();
 
     // Query params mapping: `from` = last_taken_date, `to` = updated_at
@@ -102,21 +173,68 @@ async fn update_mono_accounts_stat(
     ws_tx: &WsTx,
 ) {
     for monitor in monitors {
+        let msg = format!(
+            r#"{{"event":"monitor_pending","ida":{},"external_id":"{}","masked_pan":"{}"}}"#,
+            monitor.ida, monitor.external_id, monitor.masked_pan
+        );
+        if let Err(e) = ws_tx.send(msg) {
+            warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
+        }
+
+        if let Err(e) = update_monitor_status(
+            monitor.ida,
+            monitor.external_id.clone(),
+            AccountMonitorStatus::Pending,
+            pool,
+        )
+        .await
+        {
+            error!(
+                ida = monitor.ida,
+                external_id = monitor.external_id.clone(),
+                ?e,
+                "Monitor status update  failed"
+            );
+        }
+
         // respect rate limit: wait 61s before next request for same account
         // we sniff accounts before this fn, need to wait
         info!(ida = monitor.ida, "Sleeping 60s to respect rate limits");
         sleep(Duration::from_secs(61)).await;
 
-        let pool = pool.clone();
-        let f = req_last_taken.clone();
-        let t = req_updated_at.clone();
-
         info!(ida = monitor.ida, external_id = %monitor.external_id, "Scheduling fetch for account");
-        if let Err(e) = fetch_and_persist_account(&monitor, f, t, &pool, ws_tx).await {
+        if let Err(e) = fetch_and_persist_account(&monitor, req_last_taken, req_updated_at, &pool).await {
             error!(ida = monitor.ida, ?e, "Account fetch and persist failed");
         }
 
+        if let Err(e) = update_monitor_status(
+            monitor.ida,
+            monitor.external_id.clone(),
+            AccountMonitorStatus::Updated,
+            &pool,
+        )
+            .await
+        {
+            error!(
+                ida = monitor.ida,
+                external_id = monitor.external_id.clone(),
+                ?e,
+                "Monitor status updated failed"
+            );
+        }
 
+        let msg = format!(
+            r#"{{"event":"monitor_updated","ida":{},"external_id":"{}","masked_pan":"{}"}}"#,
+            monitor.ida, monitor.external_id, monitor.masked_pan
+        );
+        if let Err(e) = ws_tx.send(msg) {
+            warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
+        }
+    }
+
+    let msg = format!(r#"{{"event":"all_monitors_updated"}}"#,);
+    if let Err(e) = ws_tx.send(msg) {
+        warn!(?e, "No WebSocket subscribers to notify");
     }
 }
 
@@ -216,13 +334,12 @@ fn split_into_chunks(
     chunks
 }
 
-#[instrument(skip(monitor, pool, ws_tx))]
+#[instrument(skip(monitor, pool))]
 async fn fetch_and_persist_account(
     monitor: &AccountMonitor,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
     pool: &SqlitePool,
-    ws_tx: &WsTx,
 ) -> Result<(), AppError> {
     use reqwest::StatusCode as ReqStatus;
 
@@ -360,11 +477,11 @@ async fn fetch_and_persist_account(
         "Persisting bills"
     );
     transaction::repository::insert_transactions(&all_bills, pool)
-         .await
-         .map_err(|e| {
-             error!(ida = monitor.ida, ?e, "Failed to insert bills");
-             AppError::Internal("failed to persist bills".into())
-         })?;
+        .await
+        .map_err(|e| {
+            error!(ida = monitor.ida, ?e, "Failed to insert bills");
+            AppError::Internal("failed to persist bills".into())
+        })?;
 
     // update monitor timestamps per rules: updated_at = now, last_taken_date = from if from < last_taken_date
     let now = Utc::now();
@@ -394,14 +511,6 @@ async fn fetch_and_persist_account(
         ida = monitor.ida,
         "fetch_and_persist_account completed successfully"
     );
-
-    let msg = format!(
-        r#"{{"event":"transactions_updated","ida":{},"external_id":"{}"}}"#,
-        monitor.ida, monitor.external_id
-    );
-    if let Err(e) = ws_tx.send(msg) {
-        warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
-    }
 
     Ok(())
 }

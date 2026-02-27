@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS bank_account_monitor
     kind            TEXT    NOT NULL,
     updated_at      DATETIME,
     last_taken_date DATETIME,
+    status          TEXT, -- pending, updated
     FOREIGN KEY (ida) REFERENCES bank_account (ida) ON DELETE CASCADE
 );
 

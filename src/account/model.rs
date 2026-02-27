@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Serialize};
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
@@ -91,6 +92,56 @@ pub struct AccountMonitor {
     pub kind: AccountKind,
     pub updated_at: Option<DateTime<Utc>>,
     pub last_taken_date: Option<DateTime<Utc>>,
+    pub status: AccountMonitorStatus,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub enum AccountMonitorStatus {
+    Never,
+    Pending,
+    Updated
+}
+
+impl Display for AccountMonitorStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AccountMonitorStatus::Never => write!(f, "Never"),
+            AccountMonitorStatus::Pending => write!(f, "Pending"),
+            AccountMonitorStatus::Updated => write!(f, "Updated"),
+        }
+    }
+}
+
+impl sqlx::Type<Sqlite> for AccountMonitorStatus {
+    fn type_info() -> sqlx::sqlite::SqliteTypeInfo {
+        <str as sqlx::Type<Sqlite>>::type_info()
+    }
+}
+
+impl<'q> sqlx::Encode<'q, Sqlite> for AccountMonitorStatus {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        let s = match self {
+            AccountMonitorStatus::Never => "Never",
+            AccountMonitorStatus::Pending => "Pending",
+            AccountMonitorStatus::Updated => "Updated",
+        };
+        <&str as sqlx::Encode<Sqlite>>::encode(s, buf)
+    }
+}
+
+impl<'r> sqlx::Decode<'r, Sqlite> for AccountMonitorStatus {
+    fn decode(value: <Sqlite as sqlx::Database>::ValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        let s = <&str as sqlx::Decode<Sqlite>>::decode(value)?;
+        match s {
+            "Never" => Ok(AccountMonitorStatus::Never),
+            "Pending" => Ok(AccountMonitorStatus::Pending),
+            "Updated" => Ok(AccountMonitorStatus::Updated),
+            other => Err(format!("unknown AccountMonitorStatus: {}", other).into()),
+        }
+    }
 }
 
 #[derive(Deserialize)]

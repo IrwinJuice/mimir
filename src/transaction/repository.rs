@@ -1,7 +1,8 @@
-use crate::transaction::model::BankTransaction;
+use crate::transaction::model::{BankTransaction, BankTransactionFilter};
 use sqlx::sqlite::SqliteQueryResult;
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use tracing::debug;
+use crate::utils::datetime::DateTimeUtc;
 
 /// Bulk-insert transactions with "INSERT OR IGNORE" to avoid duplicates by PK id
 pub async fn insert_transactions(
@@ -54,10 +55,67 @@ pub async fn get_transactions_by_ida(
         .await
 }
 
-pub async fn get_mcc_by_idu(
+pub async fn get_transactions(
     idu: u32,
+    filter: BankTransactionFilter,
     pool: &SqlitePool,
-) -> Result<Vec<u32>, sqlx::Error> {
+) -> Result<Vec<BankTransaction>, sqlx::Error> {
+    debug!("Selecting bank transactions");
+
+    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
+        "SELECT id, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance
+        FROM bank_transaction
+        WHERE ida in ("
+    );
+
+    if let Some(ida_list) = filter.ida_list {
+        if !ida_list.is_empty() {
+            let mut separated = qb.separated(", ");
+            for ida in ida_list {
+                separated.push_bind(ida);
+            }
+            separated.push_unseparated(")");
+        } else {
+            qb.push(" select ida from bank_account where idu = ");
+            qb.push_bind(idu);
+            qb.push(")");
+        }
+    } else {
+        qb.push(" select ida from bank_account where idu = ");
+        qb.push_bind(idu);
+        qb.push(")");
+    }
+    qb.push(" AND transaction_time >= ");
+    qb.push_bind(filter.from);
+    qb.push(" AND transaction_time <= ");
+    qb.push_bind(filter.to);
+
+    if let Some(mcc_list) = filter.mcc_list {
+        if !mcc_list.is_empty() {
+            qb.push(" AND mcc IN (");
+            let mut separated = qb.separated(", ");
+            for mcc in mcc_list {
+                separated.push_bind(mcc);
+            }
+            separated.push_unseparated(")");
+        }
+    }
+
+    if let Some(ex_id_list) = filter.external_id_list {
+        if !ex_id_list.is_empty() {
+            qb.push(" AND external_id IN (");
+            let mut separated = qb.separated(", ");
+            for mcc in ex_id_list {
+                separated.push_bind(mcc);
+            }
+            separated.push_unseparated(")");
+        }
+    }
+
+    qb.build_query_as::<BankTransaction>().fetch_all(pool).await
+}
+
+pub async fn get_mcc_by_idu(idu: u32, pool: &SqlitePool) -> Result<Vec<u32>, sqlx::Error> {
     debug!(%idu, "Selecting mcc by user id");
 
     sqlx::query_scalar("select DISTINCT mcc from bank_transaction where ida in ( select ida from bank_account where idu = $1)")

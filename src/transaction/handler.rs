@@ -1,8 +1,10 @@
+use crate::account::model::StatQueryParams;
 use crate::error::AppError;
 use crate::mcc_data::{MccEntry, lookup_mcc};
+use crate::transaction::model::BankTransactionFilter;
 use crate::transaction::{BankTransaction, repository};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use sqlx::SqlitePool;
 use tracing::{debug, error, instrument};
 
@@ -38,4 +40,19 @@ pub async fn get_mcc_by_idu(
     }
 
     Ok(Json(result))
+}
+
+#[instrument(skip(pool))]
+pub async fn get_transactions(
+    Path(idu): Path<u32>,
+    Query(params): Query<BankTransactionFilter>,
+    State(pool): State<SqlitePool>,
+) -> Result<Json<Vec<BankTransaction>>, AppError> {
+    debug!(?params, "Fetching transactions");
+
+    let t_list = repository::get_transactions(idu, params, &pool).await?;
+
+    debug!(?t_list, "Transactions");
+
+    Ok(Json(t_list))
 }

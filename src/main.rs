@@ -20,7 +20,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tracing::{debug, info};
 use tracing_log::LogTracer;
 use crate::mcc_data::get_all_mcc;
-use crate::transaction::handler::{get_mcc_by_idu, get_transactions_by_ida};
+use crate::transaction::handler::{get_mcc_by_idu, get_transactions, get_transactions_by_ida};
 use crate::ws_handler::{handle_socket, WsTx};
 
 #[derive(Clone)]
@@ -82,6 +82,10 @@ async fn main() {
         .route(
             "/bills/api/users/{idu}/accounts",
             get(get_accounts_by_idu).post(add_account), // delete(delete_users),
+        )
+        .route(
+            "/bills/api/users/{idu}/transactions",
+            get(get_transactions),
         )
         .route(
             "/bills/api/users/{idu}/accounts/stat",

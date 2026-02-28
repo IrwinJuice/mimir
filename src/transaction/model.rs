@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, TimestampSeconds};
 use sqlx::FromRow;
 use sqlx::types::chrono::{DateTime, Utc};
 // ------------------ Monobank transaction DTO ------------------
@@ -31,4 +32,16 @@ pub struct BankTransaction {
     pub transaction_time: DateTime<Utc>,
     pub receipt_id: Option<String>,
     pub balance: Option<i64>,
+}
+
+#[serde_as]
+#[derive(Deserialize, Debug)]
+pub struct BankTransactionFilter {
+    pub ida_list: Option<Vec<String>>,
+    pub external_id_list: Option<Vec<String>>,
+    pub mcc_list: Option<Vec<i32>>,
+    #[serde_as(as = "TimestampSeconds<i64>")]
+    pub to: DateTime<Utc>,
+    #[serde_as(as = "TimestampSeconds<i64>")]
+    pub from: DateTime<Utc>,
 }

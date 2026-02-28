@@ -111,6 +111,7 @@ pub async fn get_transactions(
             separated.push_unseparated(")");
         }
     }
+    qb.push(" order by transaction_time");
 
     qb.build_query_as::<BankTransaction>().fetch_all(pool).await
 }

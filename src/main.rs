@@ -5,6 +5,7 @@ pub mod transaction;
 mod user;
 mod utils;
 mod ws_handler;
+mod mcc_data;
 
 use crate::account::handler::{add_account, get_account_monitor, get_accounts_by_idu, get_accounts_monitors, update_accounts_stat};
 use crate::user::{create_user, get_users};
@@ -18,7 +19,8 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::{debug, info};
 use tracing_log::LogTracer;
-use crate::transaction::handler::get_transactions_by_ida;
+use crate::mcc_data::get_all_mcc;
+use crate::transaction::handler::{get_mcc_by_idu, get_transactions_by_ida};
 use crate::ws_handler::{handle_socket, WsTx};
 
 #[derive(Clone)]
@@ -68,6 +70,14 @@ async fn main() {
         .route(
             "/bills/api/users",
             get(get_users).post(create_user), // delete(delete_users),
+        )
+        .route(
+            "/bills/api/mcc",
+            get(get_all_mcc),
+        )
+        .route(
+            "/bills/api/users/{idu}/mcc",
+            get(get_mcc_by_idu),
         )
         .route(
             "/bills/api/users/{idu}/accounts",

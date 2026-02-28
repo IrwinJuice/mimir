@@ -19,4 +19,4 @@ time = { version = "0.3", features = ["macros"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 reqwest = { version = "0.13.2", features = ["json"] }
 futures-util = "0.3.32"
-
+once_cell = "1.19.0"

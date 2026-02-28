@@ -53,3 +53,15 @@ pub async fn get_transactions_by_ida(
         .fetch_all(pool)
         .await
 }
+
+pub async fn get_mcc_by_idu(
+    idu: u32,
+    pool: &SqlitePool,
+) -> Result<Vec<u32>, sqlx::Error> {
+    debug!(%idu, "Selecting mcc by user id");
+
+    sqlx::query_scalar("select DISTINCT mcc from bank_transaction where ida in ( select ida from bank_account where idu = $1)")
+        .bind(idu)
+        .fetch_all(pool)
+        .await
+}

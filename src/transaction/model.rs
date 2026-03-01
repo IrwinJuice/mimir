@@ -20,6 +20,25 @@ pub struct MonobankTransaction {
 }
 
 #[derive(FromRow, Debug, Deserialize, Serialize, Clone)]
+pub struct BankTransactionDTO {
+    pub id: String,
+    pub external_id: String,
+    pub ida: u32,
+    pub amount: i64,
+    pub currency_code: i32,
+    pub description: Option<String>,
+    pub mcc: Option<i32>,
+    pub hold: Option<bool>,
+    pub transaction_time: DateTime<Utc>,
+    pub receipt_id: Option<String>,
+    pub balance: Option<i64>,
+
+    pub masked_pan: Option<String>,
+    pub mcc_description: Option<String>,
+    pub currency: Option<String>
+}
+
+#[derive(FromRow, Debug, Deserialize, Serialize, Clone)]
 pub struct BankTransaction {
     pub id: String,
     pub external_id: String,

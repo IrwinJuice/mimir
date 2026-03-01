@@ -1,14 +1,20 @@
 mod account;
 mod error;
+mod mcc_data;
 mod tracing_config;
 pub mod transaction;
 mod user;
 mod utils;
 mod ws_handler;
-mod mcc_data;
 
-use crate::account::handler::{add_account, get_account_monitor, get_accounts_by_idu, get_accounts_monitors, update_accounts_stat};
+use crate::account::handler::{
+    add_account, get_account_monitor, get_accounts_by_idu, get_accounts_monitors,
+    update_accounts_stat,
+};
+use crate::mcc_data::get_all_mcc;
+use crate::transaction::handler::{download_csv, download_json, download_xlsx, get_mcc_by_idu, get_transactions, get_transactions_by_ida};
 use crate::user::{create_user, get_users};
+use crate::ws_handler::{WsTx, handle_socket};
 use axum::Router;
 use axum::extract::FromRef;
 use axum::http::{HeaderValue, Method, header};
@@ -19,9 +25,6 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::{debug, info};
 use tracing_log::LogTracer;
-use crate::mcc_data::get_all_mcc;
-use crate::transaction::handler::{get_mcc_by_idu, get_transactions, get_transactions_by_ida};
-use crate::ws_handler::{handle_socket, WsTx};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -71,22 +74,16 @@ async fn main() {
             "/bills/api/users",
             get(get_users).post(create_user), // delete(delete_users),
         )
-        .route(
-            "/bills/api/mcc",
-            get(get_all_mcc),
-        )
-        .route(
-            "/bills/api/users/{idu}/mcc",
-            get(get_mcc_by_idu),
-        )
+        .route("/bills/api/mcc", get(get_all_mcc))
+        .route("/bills/api/users/{idu}/mcc", get(get_mcc_by_idu))
         .route(
             "/bills/api/users/{idu}/accounts",
             get(get_accounts_by_idu).post(add_account), // delete(delete_users),
         )
-        .route(
-            "/bills/api/users/{idu}/transactions",
-            get(get_transactions),
-        )
+        .route("/bills/api/users/{idu}/transactions", get(get_transactions))
+        .route("/bills/api/users/{idu}/transactions/csv", get(download_csv))
+        .route("/bills/api/users/{idu}/transactions/xlsx", get(download_xlsx))
+        .route("/bills/api/users/{idu}/transactions/json", get(download_json))
         .route(
             "/bills/api/users/{idu}/accounts/stat",
             put(update_accounts_stat),

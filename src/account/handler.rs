@@ -46,7 +46,7 @@ pub async fn get_accounts_by_idu(
 /// GET /bills/api/users/{idu}/monitors
 #[instrument(skip(pool))]
 pub async fn get_account_monitor(
-    Path((_, external_id)): Path<(u32,String)>,
+    Path((_, external_id)): Path<(u32, String)>,
     State(pool): State<SqlitePool>,
 ) -> Result<Json<AccountMonitor>, AppError> {
     debug!(external_id, "Fetching monitor by external_id");
@@ -60,7 +60,6 @@ pub async fn get_account_monitor(
             Err(AppError::NotFound(message))
         }
     }
-
 }
 
 /// GET /bills/api/users/{idu}/monitors
@@ -84,78 +83,6 @@ pub async fn update_accounts_stat(
     State(ws_tx): State<WsTx>,
 ) -> Result<(StatusCode, Json<Vec<AccountMonitor>>), AppError> {
     info!(idu, from = %params.from, to = %params.to, "Updating account stat");
-    // // MOCK test
-    // // // Return the user-provided JSON as typed response (constructed manually so we don't touch comments)
-    // let monitors: Vec<AccountMonitor> = vec![
-    //     AccountMonitor {
-    //         ida: 1,
-    //         external_id: "JQzeEVplrSlv9f7sh9hFLw".to_string(),
-    //         currency_code: 980,
-    //         balance: 1664,
-    //         credit_limit: 0,
-    //         iban: "UA563220010000026202351168494".to_string(),
-    //         masked_pan: "444111******5014".to_string(),
-    //         kind: AccountKind::Mono,
-    //         updated_at: None,
-    //         last_taken_date: None,
-    //         status: AccountMonitorStatus::Pending,
-    //     },
-    //     AccountMonitor {
-    //         ida: 1,
-    //         external_id: "j2ft-PJ0LDors9INaNMcgw".to_string(),
-    //         currency_code: 840,
-    //         balance: 9424,
-    //         credit_limit: 0,
-    //         iban: "UA773220010000026206330587199".to_string(),
-    //         masked_pan: "444111******4069".to_string(),
-    //         kind: AccountKind::Mono,
-    //         updated_at: None,
-    //         last_taken_date: None,
-    //         status: AccountMonitorStatus::Never,
-    //     },
-    //     AccountMonitor {
-    //         ida: 1,
-    //         external_id: "Vb2IecNJleJpaf68itjujQ".to_string(),
-    //         currency_code: 980,
-    //         balance: 592970,
-    //         credit_limit: 100000,
-    //         iban: "UA743220010000026201303310150".to_string(),
-    //         masked_pan: "444111******3308".to_string(),
-    //         kind: AccountKind::Mono,
-    //         updated_at: None,
-    //         last_taken_date: None,
-    //         status: AccountMonitorStatus::Never,
-    //     },
-    //     AccountMonitor {
-    //         ida: 1,
-    //         external_id: "9e0PiuTyuEix2kVUbq4sbg".to_string(),
-    //         currency_code: 980,
-    //         balance: 30911932,
-    //         credit_limit: 0,
-    //         iban: "UA213220010000026204307220975".to_string(),
-    //         masked_pan: "444111******4488".to_string(),
-    //         kind: AccountKind::Mono,
-    //         updated_at: None,
-    //         last_taken_date: None,
-    //         status: AccountMonitorStatus::Never,
-    //     },
-    //     AccountMonitor {
-    //         ida: 1,
-    //         external_id: "dy8oAcqW4ngR5Wy_SPO-kA".to_string(),
-    //         currency_code: 980,
-    //         balance: 0,
-    //         credit_limit: 0,
-    //         iban: "UA373220010000026200320095051".to_string(),
-    //         masked_pan: "444111******1497".to_string(),
-    //         kind: AccountKind::Mono,
-    //         updated_at: None,
-    //         last_taken_date: None,
-    //         status: AccountMonitorStatus::Never,
-    //     },
-    // ];
-
-
-
     sniff_accounts(&pool).await;
     let monitors = get_account_monitors_by_idu(idu, &pool).await?;
 
@@ -200,7 +127,6 @@ async fn update_mono_accounts_stat(
     );
     sleep(Duration::from_secs(2)).await;
     for monitor in monitors {
-
         if let Err(e) = update_monitor_status(
             monitor.ida,
             monitor.external_id.clone(),
@@ -224,7 +150,6 @@ async fn update_mono_accounts_stat(
         if let Err(e) = ws_tx.send(msg) {
             warn!(ida = monitor.ida, ?e, "No WebSocket subscribers to notify");
         }
-
 
         info!(ida = monitor.ida, external_id = %monitor.external_id, "Scheduling fetch for account");
         if let Err(e) =
@@ -383,9 +308,6 @@ async fn fetch_and_persist_account(
         return Ok(());
     }
 
-    // collect bills to insert
-    let mut all_bills: Vec<BankTransaction> = Vec::new();
-
     // get token
     let token = repository::get_token_by_ida(monitor.ida, pool)
         .await
@@ -401,6 +323,8 @@ async fn fetch_and_persist_account(
         let chunks = split_into_chunks(rstart, rend, MAX_SECONDS);
         debug!(ida = monitor.ida, chunks = ?chunks, "Split into request chunks");
         for (cstart, cend) in chunks {
+            // collect transactions to insert
+            let mut transactions: Vec<BankTransaction> = Vec::new();
             // Monobank expects unix seconds
             let from_ts = cstart.timestamp();
             let to_ts = cend.timestamp();
@@ -459,7 +383,7 @@ async fn fetch_and_persist_account(
                                 balance: Some(tx.balance),
                             };
                             debug!(ida = monitor.ida, bill_id = %nb.id, amount = nb.amount, "Prepared NewBill");
-                            all_bills.push(nb);
+                            transactions.push(nb);
                         }
 
                         break;
@@ -492,45 +416,38 @@ async fn fetch_and_persist_account(
                     }
                 }
             }
+
+            // persist bills
+            info!( ida = monitor.ida, bill_count = transactions.len(), "Persisting bills");
+
+            transaction::repository::insert_transactions(&transactions, pool)
+                .await
+                .map_err(|e| {
+                    error!(ida = monitor.ida, ?e, "Failed to insert bills");
+                    AppError::Internal("failed to persist bills".into())
+                })?;
+
+            // update monitor timestamps per rules: updated_at = now, last_taken_date = from if from < last_taken_date
+            let now = Utc::now();
+            let mut maybe_lt: Option<DateTime<Utc>> = None;
+            if let Some(ltd) = monitor.last_taken_date {
+                if cstart < ltd {
+                    maybe_lt = Some(cstart);
+                }
+            } else {
+                maybe_lt = Some(cstart);
+            }
+
+            repository::update_monitor_timestamps(monitor.ida, &monitor.external_id, now, maybe_lt, pool)
+                .await
+                .map_err(|e| {
+                    error!(ida = monitor.ida, ?e, "Failed to update monitor timestamps");
+                    AppError::Internal("failed to update monitor timestamps".into())
+                })?;
         }
     }
 
-    // persist bills
-    info!(
-        ida = monitor.ida,
-        bill_count = all_bills.len(),
-        "Persisting bills"
-    );
-    transaction::repository::insert_transactions(&all_bills, pool)
-        .await
-        .map_err(|e| {
-            error!(ida = monitor.ida, ?e, "Failed to insert bills");
-            AppError::Internal("failed to persist bills".into())
-        })?;
 
-    // update monitor timestamps per rules: updated_at = now, last_taken_date = from if from < last_taken_date
-    let now = Utc::now();
-    let mut maybe_lt: Option<DateTime<Utc>> = None;
-    if let Some(ltd) = monitor.last_taken_date {
-        if from < ltd {
-            maybe_lt = Some(from);
-        }
-    } else {
-        maybe_lt = Some(from);
-    }
-
-    repository::update_monitor_timestamps(
-        monitor.ida,
-        &monitor.external_id,
-        now,
-        maybe_lt,
-        pool,
-    )
-    .await
-    .map_err(|e| {
-        error!(ida = monitor.ida, ?e, "Failed to update monitor timestamps");
-        AppError::Internal("failed to update monitor timestamps".into())
-    })?;
 
     info!(
         ida = monitor.ida,

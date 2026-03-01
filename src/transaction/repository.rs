@@ -1,4 +1,4 @@
-use crate::transaction::model::{BankTransaction, BankTransactionFilter};
+use crate::transaction::model::{BankTransaction, BankTransactionDTO, BankTransactionFilter};
 use sqlx::sqlite::SqliteQueryResult;
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use tracing::debug;
@@ -59,13 +59,17 @@ pub async fn get_transactions(
     idu: u32,
     filter: BankTransactionFilter,
     pool: &SqlitePool,
-) -> Result<Vec<BankTransaction>, sqlx::Error> {
+) -> Result<Vec<BankTransactionDTO>, sqlx::Error> {
     debug!("Selecting bank transactions");
 
     let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
-        "SELECT id, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance
-        FROM bank_transaction
-        WHERE ida in ("
+        "SELECT t.id, t.ida, t.external_id, t.amount, t.currency_code,
+         t.description, t.mcc, t.hold, t.transaction_time, t.receipt_id, t.balance, a.masked_pan,
+         NULL as mcc_description, NULL as currency
+        FROM bank_transaction t
+            LEFT JOIN bank_account_monitor a
+            ON t.external_id = a.external_id
+        WHERE t.ida in ("
     );
 
     if let Some(ida_list) = filter.ida_list {
@@ -85,14 +89,14 @@ pub async fn get_transactions(
         qb.push_bind(idu);
         qb.push(")");
     }
-    qb.push(" AND transaction_time >= ");
+    qb.push(" AND t.transaction_time >= ");
     qb.push_bind(filter.from);
-    qb.push(" AND transaction_time <= ");
+    qb.push(" AND t.transaction_time <= ");
     qb.push_bind(filter.to);
 
     if let Some(mcc_list) = filter.mcc_list {
         if !mcc_list.is_empty() {
-            qb.push(" AND mcc IN (");
+            qb.push(" AND t.mcc IN (");
             let mut separated = qb.separated(", ");
             for mcc in mcc_list {
                 separated.push_bind(mcc);
@@ -103,7 +107,7 @@ pub async fn get_transactions(
 
     if let Some(ex_id_list) = filter.external_id_list {
         if !ex_id_list.is_empty() {
-            qb.push(" AND external_id IN (");
+            qb.push(" AND t.external_id IN (");
             let mut separated = qb.separated(", ");
             for mcc in ex_id_list {
                 separated.push_bind(mcc);
@@ -111,9 +115,9 @@ pub async fn get_transactions(
             separated.push_unseparated(")");
         }
     }
-    qb.push(" order by transaction_time");
+    qb.push(" order by t.transaction_time desc");
 
-    qb.build_query_as::<BankTransaction>().fetch_all(pool).await
+    qb.build_query_as::<BankTransactionDTO>().fetch_all(pool).await
 }
 
 pub async fn get_mcc_by_idu(idu: u32, pool: &SqlitePool) -> Result<Vec<u32>, sqlx::Error> {

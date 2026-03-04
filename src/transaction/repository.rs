@@ -1,8 +1,8 @@
 use crate::transaction::model::{BankTransaction, BankTransactionDTO, BankTransactionFilter};
+use crate::utils::datetime::DateTimeUtc;
 use sqlx::sqlite::SqliteQueryResult;
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use tracing::debug;
-use crate::utils::datetime::DateTimeUtc;
 
 /// Bulk-insert transactions with "INSERT OR IGNORE" to avoid duplicates by PK id
 pub async fn insert_transactions(
@@ -69,7 +69,7 @@ pub async fn get_transactions(
         FROM bank_transaction t
             LEFT JOIN bank_account_monitor a
             ON t.external_id = a.external_id
-        WHERE t.ida in ("
+        WHERE t.ida in (",
     );
 
     if let Some(ida_list) = filter.ida_list {
@@ -89,35 +89,71 @@ pub async fn get_transactions(
         qb.push_bind(idu);
         qb.push(")");
     }
+
     qb.push(" AND t.transaction_time >= ");
     qb.push_bind(filter.from);
     qb.push(" AND t.transaction_time <= ");
     qb.push_bind(filter.to);
 
-    if let Some(mcc_list) = filter.mcc_list {
-        if !mcc_list.is_empty() {
-            qb.push(" AND t.mcc IN (");
-            let mut separated = qb.separated(", ");
-            for mcc in mcc_list {
-                separated.push_bind(mcc);
-            }
-            separated.push_unseparated(")");
-        }
-    }
-
-    if let Some(ex_id_list) = filter.external_id_list {
-        if !ex_id_list.is_empty() {
+    if let Some(external_id_list) = filter.external_id_list {
+        if !external_id_list.is_empty() {
             qb.push(" AND t.external_id IN (");
             let mut separated = qb.separated(", ");
-            for mcc in ex_id_list {
-                separated.push_bind(mcc);
+            for eid in external_id_list {
+                separated.push_bind(eid.clone());
             }
             separated.push_unseparated(")");
         }
     }
+
+    if let Some(exceptions) = filter.exceptions {
+        for ex in &exceptions {
+            if ex.conditions.is_empty() {
+                continue;
+            }
+
+            // combinator is e.g. "AND NOT", "AND", "OR NOT", "OR"
+            qb.push(format!(" {} (", ex.combinator));
+
+            let mut first = true;
+            for cond in &ex.conditions {
+                let col = match cond.field.as_str() {
+                    "amount"      => "t.amount",
+                    "mcc"         => "t.mcc",
+                    "currency"    => "t.currency_code",
+                    "description" => "t.description",
+                    "receipt_id"  => "t.receipt_id",
+                    _             => continue,
+                };
+
+                if !first {
+                    qb.push(" AND ");
+                }
+                first = false;
+
+                match cond.operator.as_str() {
+                    "eq"         => { qb.push(format!("{} = ", col));    qb.push_bind(cond.value.clone()); }
+                    "neq"        => { qb.push(format!("{} != ", col));   qb.push_bind(cond.value.clone()); }
+                    "lt"         => { qb.push(format!("{} < ", col));    qb.push_bind(cond.value.clone()); }
+                    "gt"         => { qb.push(format!("{} > ", col));    qb.push_bind(cond.value.clone()); }
+                    "lte"        => { qb.push(format!("{} <= ", col));   qb.push_bind(cond.value.clone()); }
+                    "gte"        => { qb.push(format!("{} >= ", col));   qb.push_bind(cond.value.clone()); }
+                    "startsWith" => { qb.push(format!("{} LIKE ", col)); qb.push_bind(format!("{}%", cond.value)); }
+                    "endsWith"   => { qb.push(format!("{} LIKE ", col)); qb.push_bind(format!("%{}", cond.value)); }
+                    "contains"   => { qb.push(format!("{} LIKE ", col)); qb.push_bind(format!("%{}%", cond.value)); }
+                    _            => { first = true; }
+                }
+            }
+
+            qb.push(")");
+        }
+    }
+
     qb.push(" order by t.transaction_time desc");
 
-    qb.build_query_as::<BankTransactionDTO>().fetch_all(pool).await
+    qb.build_query_as::<BankTransactionDTO>()
+        .fetch_all(pool)
+        .await
 }
 
 pub async fn get_mcc_by_idu(idu: u32, pool: &SqlitePool) -> Result<Vec<u32>, sqlx::Error> {

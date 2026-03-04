@@ -18,7 +18,7 @@ use crate::ws_handler::{WsTx, handle_socket};
 use axum::Router;
 use axum::extract::FromRef;
 use axum::http::{HeaderValue, Method, header};
-use axum::routing::{any, get, get_service, put};
+use axum::routing::{any, get, get_service, post, put};
 use sqlx::SqlitePool;
 use std::fs::File;
 use tower_http::cors::CorsLayer;
@@ -80,10 +80,10 @@ async fn main() {
             "/bills/api/users/{idu}/accounts",
             get(get_accounts_by_idu).post(add_account), // delete(delete_users),
         )
-        .route("/bills/api/users/{idu}/transactions", get(get_transactions))
-        .route("/bills/api/users/{idu}/transactions/csv", get(download_csv))
-        .route("/bills/api/users/{idu}/transactions/xlsx", get(download_xlsx))
-        .route("/bills/api/users/{idu}/transactions/json", get(download_json))
+        .route("/bills/api/users/{idu}/transactions", post(get_transactions))
+        .route("/bills/api/users/{idu}/transactions/csv", post(download_csv))
+        .route("/bills/api/users/{idu}/transactions/xlsx", post(download_xlsx))
+        .route("/bills/api/users/{idu}/transactions/json", post(download_json))
         .route(
             "/bills/api/users/{idu}/accounts/stat",
             put(update_accounts_stat),

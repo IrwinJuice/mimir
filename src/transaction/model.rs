@@ -53,14 +53,28 @@ pub struct BankTransaction {
     pub balance: Option<i64>,
 }
 
+#[derive(Deserialize, Debug)]
+pub struct FilterCondition {
+    pub field: String,    // "amount" | "currency" | "description" | "receipt_id" | "mcc"
+    pub operator: String, // "eq" | "neq" | "lt" | "gt" | "lte" | "gte" | "startsWith" | "endsWith" | "contains"
+    pub value: String,
+}
+
+// combinator: "AND NOT" | "AND" | "OR NOT" | "OR"
+#[derive(Deserialize, Debug)]
+pub struct FilterException {
+    pub combinator: String,
+    pub conditions: Vec<FilterCondition>,
+}
+
 #[serde_as]
 #[derive(Deserialize, Debug)]
 pub struct BankTransactionFilter {
-    pub ida_list: Option<Vec<String>>,
+    pub ida_list: Option<Vec<u32>>,
     pub external_id_list: Option<Vec<String>>,
-    pub mcc_list: Option<Vec<i32>>,
-    #[serde_as(as = "TimestampSeconds<i64>")]
-    pub to: DateTime<Utc>,
+    pub exceptions: Option<Vec<FilterException>>,
     #[serde_as(as = "TimestampSeconds<i64>")]
     pub from: DateTime<Utc>,
+    #[serde_as(as = "TimestampSeconds<i64>")]
+    pub to: DateTime<Utc>,
 }

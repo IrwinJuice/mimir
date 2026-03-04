@@ -3,10 +3,10 @@ use crate::error::AppError;
 use crate::mcc_data::{MccEntry, lookup_mcc};
 use crate::transaction::model::{BankTransactionDTO, BankTransactionFilter};
 use crate::transaction::{BankTransaction, repository};
-use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, header};
 use axum::response::IntoResponse;
+use axum::Json;
 use iso_currency::Currency;
 use rust_xlsxwriter::Workbook;
 use sqlx::SqlitePool;
@@ -80,7 +80,7 @@ async fn fetch_transactions(
         })
         .collect();
 
-    debug!(?x, "Transactions");
+    // debug!(?x, "Transactions");
 
     Ok(x)
 }
@@ -88,8 +88,8 @@ async fn fetch_transactions(
 #[instrument(skip(pool))]
 pub async fn get_transactions(
     Path(idu): Path<u32>,
-    Query(params): Query<BankTransactionFilter>,
     State(pool): State<SqlitePool>,
+    Json(params): Json<BankTransactionFilter>,
 ) -> Result<Json<Vec<BankTransactionDTO>>, AppError> {
     Ok(Json(fetch_transactions(idu, params, &pool).await?))
 }
@@ -97,8 +97,8 @@ pub async fn get_transactions(
 #[instrument(skip(pool))]
 pub async fn download_csv(
     Path(idu): Path<u32>,
-    Query(params): Query<BankTransactionFilter>,
     State(pool): State<SqlitePool>,
+    Json(params): Json<BankTransactionFilter>,
 ) -> Result<impl IntoResponse, AppError> {
     let data = fetch_transactions(idu, params, &pool).await?;
 
@@ -125,8 +125,8 @@ pub async fn download_csv(
 #[instrument(skip(pool))]
 pub async fn download_json(
     Path(idu): Path<u32>,
-    Query(params): Query<BankTransactionFilter>,
     State(pool): State<SqlitePool>,
+    Json(params): Json<BankTransactionFilter>,
 ) -> Result<impl IntoResponse, AppError> {
     let data = fetch_transactions(idu, params, &pool).await?;
 
@@ -149,8 +149,8 @@ pub async fn download_json(
 #[instrument(skip(pool))]
 pub async fn download_xlsx(
     Path(idu): Path<u32>,
-    Query(params): Query<BankTransactionFilter>,
     State(pool): State<SqlitePool>,
+    Json(params): Json<BankTransactionFilter>,
 ) -> Result<impl IntoResponse, AppError> {
     let data = fetch_transactions(idu, params, &pool).await?;
 

@@ -69,7 +69,9 @@ pub async fn get_accounts_monitors(
     State(pool): State<SqlitePool>,
 ) -> Result<Json<Vec<AccountMonitor>>, AppError> {
     debug!(idu, "Fetching monitors for user");
-    let monitors = repository::fetch_all_monitors_by_idu(idu, &pool).await?;
+    let mut monitors = repository::fetch_all_monitors_by_idu(idu, &pool).await?;
+    monitors.sort_by_key(|m| m.balance);
+    monitors.reverse();
     debug!(count = monitors.len(), "Found monitors");
     Ok(Json(monitors))
 }

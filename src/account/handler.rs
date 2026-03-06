@@ -139,7 +139,7 @@ async fn update_mono_accounts_stat(
                 ida = monitor.ida,
                 external_id = monitor.external_id.clone(),
                 ?e,
-                "Monitor status update  failed"
+                "Monitor status update failed"
             );
         }
 
@@ -487,11 +487,17 @@ async fn sniff_monobank_accounts(accounts: impl Iterator<Item = Account>, pool: 
                     error!("Monobank request error for ida={}: {}", ida, e);
                     "upstream request failed".to_string()
                 })?
-                .json::<MonoClientInfo>()
+                .text()
                 .await
                 .map_err(|e| {
-                    error!("Monobank deserialize error for ida={}: {}", ida, e);
-                    "upstream response parse failed".to_string()
+                    error!("Monobank read body error for ida={}: {}", ida, e);
+                    "upstream response read failed".to_string()
+                })
+                .and_then(|body| {
+                    serde_json::from_str::<MonoClientInfo>(&body).map_err(|e| {
+                        error!("Monobank deserialize error for ida={}: {}\nBody: {}", ida, e, body);
+                        "upstream response parse failed".to_string()
+                    })
                 })?;
 
             let mut mono_accounts = info.accounts;

@@ -1,0 +1,123 @@
+name: Build and package releases
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-client:
+    name: Build Angular client
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Clone client repo
+        run: git clone https://github.com/IrwinJuice/transactions-client.git client
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install and build client
+        run: |
+          cd client
+          npm ci
+          npm run build --if-present
+
+      - name: Upload client-dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-dist
+          path: client/dist
+
+  build-linux:
+    name: Build backend and package (linux)
+    needs: build-client
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download client-dist
+        uses: actions/download-artifact@v4
+        with:
+          name: client-dist
+          path: client-dist
+
+      - name: Ensure zip is available
+        run: sudo apt-get update && sudo apt-get install -y zip
+
+      - name: Install Rust stable
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Build backend (Linux)
+        run: cargo build --release
+
+      - name: Prepare release folder and package (Linux)
+        run: |
+          mkdir -p release/linux/web
+          # copy client dist contents into release/linux/web
+          cp -a client-dist/. release/linux/web/
+          # copy linux binary (crate name from Cargo.toml)
+          cp target/release/transactions-service release/linux/
+          # create zip that contains the `linux` folder as root
+          zip -r release-linux.zip release/linux
+
+      - name: Upload release-linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: release-linux.zip
+
+  build-windows:
+    name: Build backend and package (windows)
+    needs: build-client
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download client-dist
+        uses: actions/download-artifact@v4
+        with:
+          name: client-dist
+          path: client-dist
+
+      - name: Install Rust stable
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Build backend (Windows)
+        run: cargo build --release
+        shell: pwsh
+
+      - name: Prepare release folder and package (Windows)
+        run: |
+          New-Item -ItemType Directory -Path release\windows\web -Force | Out-Null
+          # copy all contents of client-dist into release\windows\web
+          Copy-Item -Path client-dist\* -Destination release\windows\web -Recurse -Force
+          # copy windows binary
+          Copy-Item -Path target\release\transactions-service.exe -Destination release\windows\ -Force
+          # compress the release\windows folder into release-windows.zip (preserve folder root)
+          Compress-Archive -Path release\windows -DestinationPath release-windows.zip -Force
+        shell: pwsh
+
+      - name: Upload release-windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: release-windows.zip
+

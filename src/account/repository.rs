@@ -1,4 +1,3 @@
-use axum::http::StatusCode;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{Sqlite, SqlitePool};
 use tracing::{debug, error, info};

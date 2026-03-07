@@ -1,11 +1,5 @@
 use chrono::{DateTime, Utc};
 
-/// Range in Unix Timestamp
-pub struct TimestampRange {
-    pub from: i64,
-    pub to: i64,
-}
-
 pub struct DateTimeUtc(pub DateTime<Utc>);
 
 impl TryFrom<i64> for DateTimeUtc {

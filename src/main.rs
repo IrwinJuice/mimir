@@ -106,7 +106,7 @@ async fn main() {
             get(get_account_monitor),
         )
         .route("/bills/ws", any(handle_socket))
-        // Serve the Angular SPA under /bills
+        // Serve the Angular SPA under
         .nest_service("/transactions", serve_dir.clone())
         .fallback_service(get_service(serve_dir.clone()))
         .layer(

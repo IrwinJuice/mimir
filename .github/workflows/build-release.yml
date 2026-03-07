@@ -22,12 +22,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
 
       - name: Install and build client
         run: |
           cd client
-          npm ci
+          npm install
           npm run build --if-present
 
       - name: Upload client-dist artifact

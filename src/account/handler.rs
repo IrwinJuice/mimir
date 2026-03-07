@@ -31,6 +31,18 @@ pub async fn add_account(
     Ok((StatusCode::CREATED, Json(account)))
 }
 
+/// DELET /bills/api/users/:idu/account/:ida
+#[instrument(skip(pool))]
+pub async fn delete_account(
+    State(pool): State<SqlitePool>,
+    Path((idu, ida)): Path<(u32, u32)>,
+) -> Result<StatusCode, AppError> {
+    debug!(idu = idu, ida = ida, "Delete account");
+    repository::delete_account(idu, ida, &pool).await?;
+    info!(ida = ida, "Account deleted");
+    Ok(StatusCode::OK)
+}
+
 /// GET /bills/api/users/:idu/accounts
 #[instrument(skip(pool))]
 pub async fn get_accounts_by_idu(

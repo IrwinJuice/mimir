@@ -7,18 +7,15 @@ mod user;
 mod utils;
 mod ws_handler;
 
-use crate::account::handler::{
-    add_account, get_account_monitor, get_accounts_by_idu, get_accounts_monitors,
-    update_accounts_stat,
-};
+use crate::account::handler::{add_account, delete_account, get_account_monitor, get_accounts_by_idu, get_accounts_monitors, update_accounts_stat};
 use crate::mcc_data::get_all_mcc;
 use crate::transaction::handler::{download_csv, download_json, download_xlsx, get_mcc_by_idu, get_transactions, get_transactions_by_ida};
-use crate::user::{create_user, get_users};
+use crate::user::{create_user, delete_user, get_users};
 use crate::ws_handler::{WsTx, handle_socket};
 use axum::Router;
 use axum::extract::FromRef;
 use axum::http::{HeaderValue, Method, header};
-use axum::routing::{any, get, get_service, post, put};
+use axum::routing::{any, delete, get, get_service, post, put};
 use sqlx::SqlitePool;
 use std::fs::File;
 use tower_http::cors::CorsLayer;
@@ -50,7 +47,7 @@ async fn main() {
     LogTracer::init().expect("Failed to set logger");
     tracing_config::init();
 
-    info!("Starting bills-service");
+    info!("Starting transactions-service");
 
     let _ = File::create_new("bills.db");
 
@@ -64,21 +61,29 @@ async fn main() {
     let (ws_tx, _) = tokio::sync::broadcast::channel::<String>(64);
 
     // Serve Angular app from the dist folder, falling back to index.html for SPA routing
-    let serve_dir = ServeDir::new("./dist/bills-client/browser")
-        .not_found_service(ServeFile::new("./dist/bills-client/browser/index.html"));
+    let serve_dir = ServeDir::new("./dist/transactions-client/browser")
+        .not_found_service(ServeFile::new("./dist/transactions-client/browser/index.html"));
 
     // build our application with a route
     let app = Router::new()
         // Add API routes here, e.g.:
         .route(
             "/bills/api/users",
-            get(get_users).post(create_user), // delete(delete_users),
+            get(get_users).post(create_user),
+        )
+        .route(
+            "/bills/api/users/{idu}",
+            delete(delete_user),
         )
         .route("/bills/api/mcc", get(get_all_mcc))
         .route("/bills/api/users/{idu}/mcc", get(get_mcc_by_idu))
         .route(
             "/bills/api/users/{idu}/accounts",
-            get(get_accounts_by_idu).post(add_account), // delete(delete_users),
+            get(get_accounts_by_idu).post(add_account).delete(delete_account),
+        )
+        .route(
+            "/bills/api/users/{idu}/accounts/{ida}",
+            delete(delete_account),
         )
         .route("/bills/api/users/{idu}/transactions", post(get_transactions))
         .route("/bills/api/users/{idu}/transactions/csv", post(download_csv))

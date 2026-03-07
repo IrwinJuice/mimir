@@ -69,8 +69,14 @@ pub async fn get_transactions(
         FROM bank_transaction t
             LEFT JOIN bank_account_monitor a
             ON t.external_id = a.external_id
-        WHERE t.ida in (",
+            LEFT JOIN bank_account b
+            ON a.ida = b.ida
+        WHERE
+            b.idu = "
     );
+
+            qb.push_bind(idu);
+            qb.push("and t.ida in (");
 
     if let Some(ida_list) = filter.ida_list {
         if !ida_list.is_empty() {

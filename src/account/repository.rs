@@ -1,7 +1,8 @@
+use axum::http::StatusCode;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{Sqlite, SqlitePool};
 use tracing::{debug, error, info};
-
+use crate::user::User;
 use super::model::{Account, AccountKind, AccountMonitor, AccountMonitorStatus, MonoAccount};
 
 /// Fetch every account row from the DB.
@@ -169,4 +170,14 @@ pub async fn fetch_monitor_by_external_id(
         .bind(external_id)
         .fetch_optional(pool)
         .await
+}
+
+pub async fn delete_account(idu: u32, ida: u32, pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    debug!(%idu, %ida, "Deleting account");
+    sqlx::query("DELETE FROM bank_account WHERE idu = ? AND ida = ?")
+        .bind(idu)
+        .bind(ida)
+        .execute(pool)
+        .await
+        .map(|_| ())
 }

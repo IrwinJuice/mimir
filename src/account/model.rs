@@ -1,10 +1,11 @@
+use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Serialize};
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{FromRow, Sqlite};
 
-#[derive(FromRow, Debug, Serialize)]
+#[derive(FromRow, Debug, Serialize, Clone)]
 pub struct Account {
     pub ida: u32,
     pub idu: u32,
@@ -12,7 +13,7 @@ pub struct Account {
     pub token: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, Eq, PartialEq, Clone)]
 pub enum AccountKind {
     Mono,
 }
@@ -53,8 +54,14 @@ pub struct CreateAccount {
     pub token: String,
 }
 
+/// Top-level response from `GET /personal/client-info`.
+#[derive(Deserialize, Debug)]
+pub struct MonoClientInfo {
+    pub accounts: Vec<MonoAccount>,
+}
+
 /// A single account entry returned from the Monobank API.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MonoAccount {
     /// The `ida` from our DB — injected after the API call.
     #[serde(skip_deserializing)]
@@ -64,7 +71,7 @@ pub struct MonoAccount {
     pub send_id: String,
     #[serde(rename = "currencyCode")]
     pub currency_code: u32,
-    pub balance: u32,
+    pub balance: u64,
     #[serde(rename = "creditLimit")]
     pub credit_limit: u32,
     #[serde(rename = "maskedPan")]
@@ -73,7 +80,7 @@ pub struct MonoAccount {
 }
 
 /// A row from the `accounts_monitor` table.
-#[derive(FromRow, Debug, Serialize)]
+#[derive(FromRow, Debug, Serialize, Clone)]
 pub struct AccountMonitor {
     pub ida: u32,
     pub external_id: String,
@@ -82,13 +89,64 @@ pub struct AccountMonitor {
     pub credit_limit: u32, 
     pub iban: String,      
     pub masked_pan: String,
-    pub kind: AccountKind, 
+    pub kind: AccountKind,
     pub updated_at: Option<DateTime<Utc>>,
+    pub last_taken_date: Option<DateTime<Utc>>,
+    pub status: AccountMonitorStatus,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub enum AccountMonitorStatus {
+    Never,
+    Pending,
+    Updated
+}
+
+impl Display for AccountMonitorStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AccountMonitorStatus::Never => write!(f, "Never"),
+            AccountMonitorStatus::Pending => write!(f, "Pending"),
+            AccountMonitorStatus::Updated => write!(f, "Updated"),
+        }
+    }
+}
+
+impl sqlx::Type<Sqlite> for AccountMonitorStatus {
+    fn type_info() -> sqlx::sqlite::SqliteTypeInfo {
+        <str as sqlx::Type<Sqlite>>::type_info()
+    }
+}
+
+impl<'q> sqlx::Encode<'q, Sqlite> for AccountMonitorStatus {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        let s = match self {
+            AccountMonitorStatus::Never => "Never",
+            AccountMonitorStatus::Pending => "Pending",
+            AccountMonitorStatus::Updated => "Updated",
+        };
+        <&str as sqlx::Encode<Sqlite>>::encode(s, buf)
+    }
+}
+
+impl<'r> sqlx::Decode<'r, Sqlite> for AccountMonitorStatus {
+    fn decode(value: <Sqlite as sqlx::Database>::ValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        let s = <&str as sqlx::Decode<Sqlite>>::decode(value)?;
+        match s {
+            "Never" => Ok(AccountMonitorStatus::Never),
+            "Pending" => Ok(AccountMonitorStatus::Pending),
+            "Updated" => Ok(AccountMonitorStatus::Updated),
+            other => Err(format!("unknown AccountMonitorStatus: {}", other).into()),
+        }
+    }
 }
 
 #[derive(Deserialize)]
 pub struct StatQueryParams {
-    pub from: String,
-    pub to: String,
+    pub from: i64,
+    pub to: i64,
 }
 

@@ -1,11 +1,13 @@
-use sqlx::{QueryBuilder, Sqlite, SqlitePool};
-use tracing::error;
-
-use super::model::{Account, AccountKind, AccountMonitor, MonoAccount};
+use sqlx::types::chrono::{DateTime, Utc};
+use sqlx::{Sqlite, SqlitePool};
+use tracing::{debug, error, info};
+use crate::user::User;
+use super::model::{Account, AccountKind, AccountMonitor, AccountMonitorStatus, MonoAccount};
 
 /// Fetch every account row from the DB.
 pub async fn find_all(pool: &SqlitePool) -> Vec<Account> {
-    sqlx::query_as::<Sqlite, Account>("SELECT ida, idu, kind, token FROM accounts")
+    debug!("Selecting all accounts from DB");
+    sqlx::query_as::<Sqlite, Account>("SELECT ida, idu, kind, token FROM bank_account")
         .fetch_all(pool)
         .await
         .unwrap_or_else(|err| {
@@ -16,10 +18,13 @@ pub async fn find_all(pool: &SqlitePool) -> Vec<Account> {
 
 /// Fetch all accounts belonging to a specific user.
 pub async fn find_by_idu(idu: u32, pool: &SqlitePool) -> Result<Vec<Account>, sqlx::Error> {
-    sqlx::query_as::<Sqlite, Account>("SELECT ida, idu, kind, token FROM accounts WHERE idu = $1")
-        .bind(idu)
-        .fetch_all(pool)
-        .await
+    debug!(%idu, "Selecting accounts by idu");
+    sqlx::query_as::<Sqlite, Account>(
+        "SELECT ida, idu, kind, token FROM bank_account WHERE idu = $1",
+    )
+    .bind(idu)
+    .fetch_all(pool)
+    .await
 }
 
 /// Insert a new account row and return the created record.
@@ -29,8 +34,9 @@ pub async fn insert(
     token: String,
     pool: &SqlitePool,
 ) -> Result<Account, sqlx::Error> {
+    debug!(%idu, "Inserting new account");
     sqlx::query_as::<Sqlite, Account>(
-        "INSERT INTO accounts (idu, kind, token) VALUES ($1, $2, $3) RETURNING ida, idu, kind, token",
+        "INSERT INTO bank_account (idu, kind, token) VALUES ($1, $2, $3) RETURNING ida, idu, kind, token",
     )
     .bind(idu)
     .bind(kind)
@@ -45,35 +51,132 @@ pub async fn insert_mono_accounts_monitor(
     pool: &SqlitePool,
 ) -> Result<(), sqlx::Error> {
     if accounts.is_empty() {
+        debug!("No mono accounts to insert");
         return Ok(());
     }
 
-    let mut query_builder: QueryBuilder<Sqlite> =
-        QueryBuilder::new("INSERT INTO accounts_monitor (ida, external_id, currency_code, balance, credit_limit, iban, masked_pan) ");
+    debug!(
+        count = accounts.len(),
+        "Inserting mono accounts into accounts_monitor"
+    );
 
-    query_builder.push_values(accounts.iter(), |mut b, account| {
-        b.push_bind(account.ida)
-            .push_bind(account.id.clone())
-            .push_bind(account.currency_code)
-            .push_bind(account.balance)
-            .push_bind(account.credit_limit)
-            .push_bind(account.iban.clone())
-            .push_bind(account.masked_pan[0].clone());
-    });
+    for account in accounts {
+        debug!(external_id = %account.id, ida = account.ida, "Inserting monitor row");
+        sqlx::query(
+            "INSERT INTO bank_account_monitor (ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, status) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(external_id) DO NOTHING",
+        )
+        .bind(account.ida)
+        .bind(&account.id)
+        .bind(account.currency_code as i64)
+        .bind(account.balance as i64)
+        .bind(account.credit_limit as i64)
+        .bind(&account.iban)
+        .bind(account.masked_pan.join(","))
+        .bind("Mono")
+        .bind(AccountMonitorStatus::Never.to_string())
+        .execute(pool)
+        .await?;
+    }
 
-    query_builder.build().execute(pool).await.map(|_| ())
+    info!("Inserted mono accounts monitors");
+    Ok(())
 }
 
 /// Fetch all rows from `accounts_monitor`.
-pub async fn find_all_monitors_by_idu(
+pub async fn fetch_all_monitors_by_idu(
     idu: u32,
     pool: &SqlitePool,
 ) -> Result<Vec<AccountMonitor>, sqlx::Error> {
+    debug!(%idu, "Selecting account monitors by user id");
     sqlx::query_as::<Sqlite, AccountMonitor>(
-        "SELECT ida, external_id, updated_at FROM accounts_monitor where ida in (\
-        select ida from accounts where idu = $1)",
+        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, updated_at, last_taken_date, status
+        FROM bank_account_monitor where ida in (
+            select ida from bank_account where idu = $1)",
     )
     .bind(idu)
     .fetch_all(pool)
     .await
+}
+
+/// Fetch token for account by ida
+pub async fn get_token_by_ida(ida: u32, pool: &SqlitePool) -> Result<String, sqlx::Error> {
+    debug!(ida, "Selecting token by ida");
+    let token: String = sqlx::query_scalar("SELECT token FROM bank_account WHERE ida = ?")
+        .bind(ida)
+        .fetch_one(pool)
+        .await?;
+    Ok(token)
+}
+
+/// Update accounts_monitor status
+pub async fn update_monitor_status(
+    ida: u32,
+    external_id: String,
+    status: AccountMonitorStatus,
+    pool: &SqlitePool,
+) -> Result<(), sqlx::Error> {
+    debug!(ida, "Updating monitor status");
+    sqlx::query("UPDATE bank_account_monitor SET status = ? WHERE ida = ? and external_id = ?")
+        .bind(status.to_string())
+        .bind(ida)
+        .bind(external_id)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+/// Update accounts_monitor timestamps after successful fetch
+pub async fn update_monitor_timestamps(
+    ida: u32,
+    external_id: &str,
+    updated_at: DateTime<Utc>,
+    maybe_last_taken_date: Option<DateTime<Utc>>,
+    pool: &SqlitePool,
+) -> Result<(), sqlx::Error> {
+    debug!(ida, "Updating monitor timestamps");
+    if let Some(lt) = maybe_last_taken_date {
+        sqlx::query("UPDATE bank_account_monitor SET updated_at = ?, last_taken_date = ? WHERE ida = ? and external_id = ?")
+            .bind(updated_at)
+            .bind(lt)
+            .bind(ida)
+            .bind(external_id)
+            .execute(pool)
+            .await
+            .map(|_| ())
+    } else {
+        sqlx::query(
+            "UPDATE bank_account_monitor SET updated_at = ? WHERE ida = ? and external_id = ?",
+        )
+        .bind(updated_at)
+        .bind(ida)
+        .bind(external_id)
+        .execute(pool)
+        .await
+        .map(|_| ())
+    }
+}
+
+pub async fn fetch_monitor_by_external_id(
+    external_id: &str,
+    pool: &SqlitePool,
+) -> Result<Option<AccountMonitor>, sqlx::Error> {
+    debug!(%external_id, "Selecting account monitor by external_id");
+    sqlx::query_as::<Sqlite, AccountMonitor>(
+        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, updated_at, last_taken_date, status
+        FROM bank_account_monitor where external_id = $1",
+    )
+        .bind(external_id)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn delete_account(idu: u32, ida: u32, pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    debug!(%idu, %ida, "Deleting account");
+    sqlx::query("DELETE FROM bank_account WHERE idu = ? AND ida = ?")
+        .bind(idu)
+        .bind(ida)
+        .execute(pool)
+        .await
+        .map(|_| ())
 }

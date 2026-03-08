@@ -1,7 +1,4 @@
-use super::model::{
-    Account, AccountKind, AccountMonitor, AccountMonitorStatus, CreateAccount, MonoAccount,
-    MonoClientInfo, StatQueryParams,
-};
+use super::model::{Account, AccountKind, AccountMonitor, AccountMonitorStatus, MonoAccount, MonoClientInfo, NewAccount, StatQueryParams, UpdateAccount};
 use super::repository;
 use crate::account::repository::update_monitor_status;
 use crate::error::AppError;
@@ -19,46 +16,58 @@ use tokio::task::JoinSet;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, instrument, warn};
 
-/// POST /bills/api/users/:idu/accounts
-#[instrument(skip(pool, payload))]
+/// POST /mimir/api/accounts
+#[instrument(skip(pool))]
 pub async fn add_account(
     State(pool): State<SqlitePool>,
-    Json(payload): Json<CreateAccount>,
+    Json(payload): Json<NewAccount>,
 ) -> Result<(StatusCode, Json<Account>), AppError> {
-    debug!(idu = payload.idu, "Adding account");
-    let account = repository::insert(payload.idu, payload.kind, payload.token, &pool).await?;
+    debug!(account_name = payload.name, "Adding account");
+    let account = repository::insert(payload, &pool).await?;
     info!(ida = account.ida, "Account created");
     Ok((StatusCode::CREATED, Json(account)))
 }
 
-/// DELET /bills/api/users/:idu/account/:ida
+/// GET /mimir/api/accounts
+#[instrument(skip(pool))]
+pub async fn get_accounts(
+    State(pool): State<SqlitePool>,
+) -> Result<(StatusCode, Json<Vec<Account>>), AppError> {
+    let accounts = repository::find_all(&pool).await;
+    info!(accounts = accounts.len(), "Found");
+    Ok((StatusCode::CREATED, Json(accounts)))
+}
+
+/// DELETE /mimir/api/account/:ida
 #[instrument(skip(pool))]
 pub async fn delete_account(
     State(pool): State<SqlitePool>,
-    Path((idu, ida)): Path<(u32, u32)>,
+    Path(ida): Path<u32>,
 ) -> Result<StatusCode, AppError> {
-    debug!(idu = idu, ida = ida, "Delete account");
-    repository::delete_account(idu, ida, &pool).await?;
+    debug!(ida = ida, "Delete account");
+    repository::delete_account(ida, &pool).await?;
     info!(ida = ida, "Account deleted");
     Ok(StatusCode::OK)
 }
 
-/// GET /bills/api/users/:idu/accounts
+/// PUT /mimir/api/account/:ida
 #[instrument(skip(pool))]
-pub async fn get_accounts_by_idu(
-    Path(idu): Path<u32>,
+pub async fn update_account(
     State(pool): State<SqlitePool>,
-) -> Result<Json<Vec<Account>>, AppError> {
-    debug!(idu, "Fetching accounts for user");
-    let accounts = repository::find_by_idu(idu, &pool).await?;
-    debug!(count = accounts.len(), "Found accounts");
-    Ok(Json(accounts))
+    Path(ida): Path<u32>,
+    Json(payload): Json<UpdateAccount>,
+) -> Result<(StatusCode, Json<Account>), AppError> {
+    debug!(ida = ida, "Delete account");
+
+    let account = repository::update_account(ida, payload, &pool).await?;
+    info!(ida = account.ida, "Account created");
+    Ok((StatusCode::OK, Json(account)))
 }
 
-/// GET /bills/api/users/{idu}/monitors
+/// GET /mimir/api/monitors
 #[instrument(skip(pool))]
 pub async fn get_account_monitor(
-    Path((_, external_id)): Path<(u32, String)>,
+    Path(external_id): Path<String>,
     State(pool): State<SqlitePool>,
 ) -> Result<Json<AccountMonitor>, AppError> {
     debug!(external_id, "Fetching monitor by external_id");
@@ -74,31 +83,27 @@ pub async fn get_account_monitor(
     }
 }
 
-/// GET /bills/api/users/{idu}/monitors
+/// GET /mimir/api/monitors
 #[instrument(skip(pool))]
 pub async fn get_accounts_monitors(
-    Path(idu): Path<u32>,
     State(pool): State<SqlitePool>,
 ) -> Result<Json<Vec<AccountMonitor>>, AppError> {
-    debug!(idu, "Fetching monitors for user");
-    let mut monitors = repository::fetch_all_monitors_by_idu(idu, &pool).await?;
-    monitors.sort_by_key(|m| m.balance);
-    monitors.reverse();
+    debug!("Fetching monitors");
+    let monitors = get_monitors(&pool).await;
     debug!(count = monitors.len(), "Found monitors");
     Ok(Json(monitors))
 }
 
-/// PUT /bills/api/users/:idu/accounts/stat
+/// PUT /mimir/api/accounts/stat
 #[instrument(skip(pool, params, ws_tx))]
 pub async fn update_accounts_stat(
     Query(params): Query<StatQueryParams>,
-    Path(idu): Path<u32>,
     State(pool): State<SqlitePool>,
     State(ws_tx): State<WsTx>,
 ) -> Result<(StatusCode, Json<Vec<AccountMonitor>>), AppError> {
-    info!(idu, from = %params.from, to = %params.to, "Updating account stat");
+    info!(from = %params.from, to = %params.to, "Updating account stat");
     sniff_accounts(&pool).await;
-    let monitors = get_account_monitors_by_idu(idu, &pool).await?;
+    let monitors = get_monitors(&pool).await;
 
     debug!("monitors_get_by_idu {:?}", &monitors);
 
@@ -106,12 +111,12 @@ pub async fn update_accounts_stat(
 
     // Query params mapping: `from` = last_taken_date, `to` = updated_at
     let DateTimeUtc(req_last_taken) = params.from.clone().try_into().map_err(|e| {
-        error!(idu = idu, from = %params.from, "Invalid 'from' datetime: {}", e);
+        error!(from = %params.from, "Invalid 'from' datetime: {}", e);
         AppError::BadRequest(e)
     })?;
 
     let DateTimeUtc(req_updated_at) = params.to.clone().try_into().map_err(|e| {
-        error!(idu = idu, to = %params.to, "Invalid 'to' datetime: {}", e);
+        error!(to = %params.to, "Invalid 'to' datetime: {}", e);
         AppError::BadRequest(e)
     })?;
 
@@ -361,7 +366,7 @@ async fn fetch_and_persist_account(
                 let resp = client
                     .get(&url)
                     .header("X-Token", &token)
-                    .header(USER_AGENT, "Local bills")
+                    .header(USER_AGENT, "Local mimir")
                     .send()
                     .await;
 
@@ -431,14 +436,14 @@ async fn fetch_and_persist_account(
                 }
             }
 
-            // persist bills
-            info!( ida = monitor.ida, bill_count = transactions.len(), "Persisting bills");
+            // persist mimir
+            info!( ida = monitor.ida, bill_count = transactions.len(), "Persisting mimir");
 
             transaction::repository::insert_transactions(&transactions, pool)
                 .await
                 .map_err(|e| {
-                    error!(ida = monitor.ida, ?e, "Failed to insert bills");
-                    AppError::Internal("failed to persist bills".into())
+                    error!(ida = monitor.ida, ?e, "Failed to insert mimir");
+                    AppError::Internal("failed to persist mimir".into())
                 })?;
 
             // update monitor timestamps per rules: updated_at = now, last_taken_date = from if from < last_taken_date
@@ -486,7 +491,13 @@ async fn sniff_monobank_accounts(accounts: impl Iterator<Item = Account>, pool: 
     let mut set: JoinSet<Result<Vec<MonoAccount>, String>> = JoinSet::new();
 
     for account in accounts {
-        let token = account.token.clone();
+        let token = match repository::get_token_by_ida(account.ida, pool).await {
+            Ok(t) => t,
+            Err(e) => {
+                error!("Failed to fetch token for ida={}: {}", account.ida, e);
+                continue;
+            }
+        };
         let ida = account.ida;
 
         set.spawn(async move {
@@ -494,7 +505,7 @@ async fn sniff_monobank_accounts(accounts: impl Iterator<Item = Account>, pool: 
             let info = client
                 .get(MONO_CLIENT_INFO_URL)
                 .header("X-Token", &token)
-                .header(USER_AGENT, "Local bills")
+                .header(USER_AGENT, "Local mimir")
                 .send()
                 .await
                 .map_err(|e| {
@@ -537,9 +548,11 @@ async fn sniff_monobank_accounts(accounts: impl Iterator<Item = Account>, pool: 
 }
 
 /// Returns all account monitor rows
-async fn get_account_monitors_by_idu(
-    idu: u32,
+async fn get_monitors(
     pool: &SqlitePool,
-) -> Result<Vec<AccountMonitor>, sqlx::Error> {
-    repository::fetch_all_monitors_by_idu(idu, pool).await
+) -> Vec<AccountMonitor> {
+    let mut monitors = repository::fetch_all_monitors(&pool).await;
+    monitors.sort_by_key(|m| m.balance);
+    monitors.reverse();
+    monitors
 }

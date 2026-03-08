@@ -1,16 +1,29 @@
-use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Serialize};
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{FromRow, Sqlite};
+use std::fmt::{Display, Formatter};
+use secrecy::SecretString;
+
+#[derive(Deserialize, Debug)]
+pub struct NewAccount {
+    pub kind: AccountKind,
+    pub token: SecretString,
+    pub name: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct UpdateAccount {
+    pub token: Option<SecretString>,
+    pub name: Option<String>,
+}
 
 #[derive(FromRow, Debug, Serialize, Clone)]
 pub struct Account {
     pub ida: u32,
-    pub idu: u32,
     pub kind: AccountKind,
-    pub token: String,
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Eq, PartialEq, Clone)]
@@ -46,14 +59,6 @@ impl<'r> sqlx::Decode<'r, Sqlite> for AccountKind {
     }
 }
 
-/// HTTP request payload for creating an account.
-#[derive(Deserialize)]
-pub struct CreateAccount {
-    pub idu: u32,
-    pub kind: AccountKind,
-    pub token: String,
-}
-
 /// Top-level response from `GET /personal/client-info`.
 #[derive(Deserialize, Debug)]
 pub struct MonoClientInfo {
@@ -85,9 +90,9 @@ pub struct AccountMonitor {
     pub ida: u32,
     pub external_id: String,
     pub currency_code: u32,
-    pub balance: u32,      
-    pub credit_limit: u32, 
-    pub iban: String,      
+    pub balance: u32,
+    pub credit_limit: u32,
+    pub iban: String,
     pub masked_pan: String,
     pub kind: AccountKind,
     pub updated_at: Option<DateTime<Utc>>,
@@ -99,7 +104,7 @@ pub struct AccountMonitor {
 pub enum AccountMonitorStatus {
     Never,
     Pending,
-    Updated
+    Updated,
 }
 
 impl Display for AccountMonitorStatus {
@@ -133,7 +138,9 @@ impl<'q> sqlx::Encode<'q, Sqlite> for AccountMonitorStatus {
 }
 
 impl<'r> sqlx::Decode<'r, Sqlite> for AccountMonitorStatus {
-    fn decode(value: <Sqlite as sqlx::Database>::ValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+    fn decode(
+        value: <Sqlite as sqlx::Database>::ValueRef<'r>,
+    ) -> Result<Self, sqlx::error::BoxDynError> {
         let s = <&str as sqlx::Decode<Sqlite>>::decode(value)?;
         match s {
             "Never" => Ok(AccountMonitorStatus::Never),
@@ -149,4 +156,3 @@ pub struct StatQueryParams {
     pub from: i64,
     pub to: i64,
 }
-

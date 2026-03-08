@@ -1,13 +1,16 @@
+use super::model::{
+    Account, AccountKind, AccountMonitor, AccountMonitorStatus, MonoAccount, NewAccount,
+    UpdateAccount,
+};
+use secrecy::ExposeSecret;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{Sqlite, SqlitePool};
 use tracing::{debug, error, info};
-use crate::user::User;
-use super::model::{Account, AccountKind, AccountMonitor, AccountMonitorStatus, MonoAccount};
 
 /// Fetch every account row from the DB.
 pub async fn find_all(pool: &SqlitePool) -> Vec<Account> {
     debug!("Selecting all accounts from DB");
-    sqlx::query_as::<Sqlite, Account>("SELECT ida, idu, kind, token FROM bank_account")
+    sqlx::query_as::<Sqlite, Account>("SELECT ida, kind, name FROM bank_account")
         .fetch_all(pool)
         .await
         .unwrap_or_else(|err| {
@@ -16,31 +19,15 @@ pub async fn find_all(pool: &SqlitePool) -> Vec<Account> {
         })
 }
 
-/// Fetch all accounts belonging to a specific user.
-pub async fn find_by_idu(idu: u32, pool: &SqlitePool) -> Result<Vec<Account>, sqlx::Error> {
-    debug!(%idu, "Selecting accounts by idu");
-    sqlx::query_as::<Sqlite, Account>(
-        "SELECT ida, idu, kind, token FROM bank_account WHERE idu = $1",
-    )
-    .bind(idu)
-    .fetch_all(pool)
-    .await
-}
-
 /// Insert a new account row and return the created record.
-pub async fn insert(
-    idu: u32,
-    kind: AccountKind,
-    token: String,
-    pool: &SqlitePool,
-) -> Result<Account, sqlx::Error> {
-    debug!(%idu, "Inserting new account");
+pub async fn insert(account: NewAccount, pool: &SqlitePool) -> Result<Account, sqlx::Error> {
+    debug!("Inserting new account");
     sqlx::query_as::<Sqlite, Account>(
-        "INSERT INTO bank_account (idu, kind, token) VALUES ($1, $2, $3) RETURNING ida, idu, kind, token",
+        "INSERT INTO bank_account (kind, token, name) VALUES ($1, $2, $3) RETURNING ida, kind, name",
     )
-    .bind(idu)
-    .bind(kind)
-    .bind(token)
+    .bind(account.kind)
+    .bind(account.token.expose_secret())
+    .bind(account.name)
     .fetch_one(pool)
     .await
 }
@@ -63,8 +50,8 @@ pub async fn insert_mono_accounts_monitor(
     for account in accounts {
         debug!(external_id = %account.id, ida = account.ida, "Inserting monitor row");
         sqlx::query(
-            "INSERT INTO bank_account_monitor (ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, status) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+            "INSERT INTO bank_account_monitor (ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(external_id) DO NOTHING",
         )
         .bind(account.ida)
@@ -85,19 +72,18 @@ pub async fn insert_mono_accounts_monitor(
 }
 
 /// Fetch all rows from `accounts_monitor`.
-pub async fn fetch_all_monitors_by_idu(
-    idu: u32,
-    pool: &SqlitePool,
-) -> Result<Vec<AccountMonitor>, sqlx::Error> {
-    debug!(%idu, "Selecting account monitors by user id");
+pub async fn fetch_all_monitors(pool: &SqlitePool) -> Vec<AccountMonitor> {
+    debug!("Selecting account monitors");
     sqlx::query_as::<Sqlite, AccountMonitor>(
         "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, updated_at, last_taken_date, status
-        FROM bank_account_monitor where ida in (
-            select ida from bank_account where idu = $1)",
+        FROM bank_account_monitor",
     )
-    .bind(idu)
     .fetch_all(pool)
     .await
+    .unwrap_or_else(|err| {
+        error!("SQL error fetching all accounts: {}", err);
+        vec![]
+    })
 }
 
 /// Fetch token for account by ida
@@ -171,12 +157,54 @@ pub async fn fetch_monitor_by_external_id(
         .await
 }
 
-pub async fn delete_account(idu: u32, ida: u32, pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    debug!(%idu, %ida, "Deleting account");
-    sqlx::query("DELETE FROM bank_account WHERE idu = ? AND ida = ?")
-        .bind(idu)
+pub async fn delete_account(ida: u32, pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    debug!(%ida, "Deleting account");
+    sqlx::query("DELETE FROM bank_account WHERE ida = ?")
         .bind(ida)
         .execute(pool)
         .await
         .map(|_| ())
+}
+
+pub async fn update_account(
+    ida: u32,
+    payload: UpdateAccount,
+    pool: &SqlitePool,
+) -> Result<Account, sqlx::Error> {
+    debug!(ida, "Updating account");
+
+    let mut set_clauses: Vec<&str> = Vec::new();
+
+    if payload.name.is_some() {
+        set_clauses.push("name = ?");
+    }
+    if payload.token.is_some() {
+        set_clauses.push("token = ?");
+    }
+
+    if set_clauses.is_empty() {
+        debug!(ida, "Nothing to update, fetching existing account");
+        return sqlx::query_as::<Sqlite, Account>(
+            "SELECT ida, kind, name FROM bank_account WHERE ida = ?",
+        )
+        .bind(ida)
+        .fetch_one(pool)
+        .await;
+    }
+
+    let sql = format!(
+        "UPDATE bank_account SET {} WHERE ida = ? RETURNING ida, kind, name",
+        set_clauses.join(", ")
+    );
+
+    let mut query = sqlx::query_as::<Sqlite, Account>(&sql);
+
+    if let Some(name) = payload.name {
+        query = query.bind(name);
+    }
+    if let Some(token) = payload.token {
+        query = query.bind(token.expose_secret().to_owned());
+    }
+
+    query.bind(ida).fetch_one(pool).await
 }

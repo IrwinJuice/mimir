@@ -1,5 +1,5 @@
 [package]
-name = "transactions-service"
+name = "mimir"
 version = "0.1.0"
 edition = "2024"
 
@@ -24,4 +24,5 @@ iso_currency = "0.5.3"
 tokio-util = "0.7.18"
 csv = "1.4.0"
 rust_xlsxwriter = "0.94.0"
-
+config = "0.15.19"
+secrecy = { version = "0.10", features = ["serde"] }

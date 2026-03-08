@@ -56,7 +56,6 @@ pub async fn get_transactions_by_ida(
 }
 
 pub async fn get_transactions(
-    idu: u32,
     filter: BankTransactionFilter,
     pool: &SqlitePool,
 ) -> Result<Vec<BankTransactionDTO>, sqlx::Error> {
@@ -71,12 +70,10 @@ pub async fn get_transactions(
             ON t.external_id = a.external_id
             LEFT JOIN bank_account b
             ON a.ida = b.ida
-        WHERE
-            b.idu = "
+        WHERE ",
     );
 
-            qb.push_bind(idu);
-            qb.push("and t.ida in (");
+    qb.push("t.ida in (");
 
     if let Some(ida_list) = filter.ida_list {
         if !ida_list.is_empty() {
@@ -86,14 +83,10 @@ pub async fn get_transactions(
             }
             separated.push_unseparated(")");
         } else {
-            qb.push(" select ida from bank_account where idu = ");
-            qb.push_bind(idu);
-            qb.push(")");
+            qb.push(" select ida from bank_account)");
         }
     } else {
-        qb.push(" select ida from bank_account where idu = ");
-        qb.push_bind(idu);
-        qb.push(")");
+        qb.push(" select ida from bank_account)");
     }
 
     qb.push(" AND t.transaction_time >= ");
@@ -124,12 +117,12 @@ pub async fn get_transactions(
             let mut first = true;
             for cond in &ex.conditions {
                 let col = match cond.field.as_str() {
-                    "amount"      => "t.amount",
-                    "mcc"         => "t.mcc",
-                    "currency"    => "t.currency_code",
+                    "amount" => "t.amount",
+                    "mcc" => "t.mcc",
+                    "currency" => "t.currency_code",
                     "description" => "t.description",
-                    "receipt_id"  => "t.receipt_id",
-                    _             => continue,
+                    "receipt_id" => "t.receipt_id",
+                    _ => continue,
                 };
 
                 if !first {
@@ -138,16 +131,45 @@ pub async fn get_transactions(
                 first = false;
 
                 match cond.operator.as_str() {
-                    "eq"         => { qb.push(format!("{} = ", col));    qb.push_bind(cond.value.clone()); }
-                    "neq"        => { qb.push(format!("{} != ", col));   qb.push_bind(cond.value.clone()); }
-                    "lt"         => { qb.push(format!("{} < ", col));    qb.push_bind(cond.value.clone()); }
-                    "gt"         => { qb.push(format!("{} > ", col));    qb.push_bind(cond.value.clone()); }
-                    "lte"        => { qb.push(format!("{} <= ", col));   qb.push_bind(cond.value.clone()); }
-                    "gte"        => { qb.push(format!("{} >= ", col));   qb.push_bind(cond.value.clone()); }
-                    "startsWith" => { qb.push(format!("{} LIKE ", col)); qb.push_bind(format!("{}%", cond.value)); }
-                    "endsWith"   => { qb.push(format!("{} LIKE ", col)); qb.push_bind(format!("%{}", cond.value)); }
-                    "contains"   => { qb.push(format!("{} LIKE ", col)); qb.push_bind(format!("%{}%", cond.value)); }
-                    _            => { first = true; }
+                    "eq" => {
+                        qb.push(format!("{} = ", col));
+                        qb.push_bind(cond.value.clone());
+                    }
+                    "neq" => {
+                        qb.push(format!("{} != ", col));
+                        qb.push_bind(cond.value.clone());
+                    }
+                    "lt" => {
+                        qb.push(format!("{} < ", col));
+                        qb.push_bind(cond.value.clone());
+                    }
+                    "gt" => {
+                        qb.push(format!("{} > ", col));
+                        qb.push_bind(cond.value.clone());
+                    }
+                    "lte" => {
+                        qb.push(format!("{} <= ", col));
+                        qb.push_bind(cond.value.clone());
+                    }
+                    "gte" => {
+                        qb.push(format!("{} >= ", col));
+                        qb.push_bind(cond.value.clone());
+                    }
+                    "startsWith" => {
+                        qb.push(format!("{} LIKE ", col));
+                        qb.push_bind(format!("{}%", cond.value));
+                    }
+                    "endsWith" => {
+                        qb.push(format!("{} LIKE ", col));
+                        qb.push_bind(format!("%{}", cond.value));
+                    }
+                    "contains" => {
+                        qb.push(format!("{} LIKE ", col));
+                        qb.push_bind(format!("%{}%", cond.value));
+                    }
+                    _ => {
+                        first = true;
+                    }
                 }
             }
 
@@ -162,11 +184,10 @@ pub async fn get_transactions(
         .await
 }
 
-pub async fn get_mcc_by_idu(idu: u32, pool: &SqlitePool) -> Result<Vec<u32>, sqlx::Error> {
-    debug!(%idu, "Selecting mcc by user id");
+pub async fn get_mcc_by_idu(pool: &SqlitePool) -> Result<Vec<u32>, sqlx::Error> {
+    debug!("Selecting mcc");
 
-    sqlx::query_scalar("select DISTINCT mcc from bank_transaction where ida in ( select ida from bank_account where idu = $1)")
-        .bind(idu)
+    sqlx::query_scalar("select DISTINCT mcc from bank_transaction")
         .fetch_all(pool)
         .await
 }

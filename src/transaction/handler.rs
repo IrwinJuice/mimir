@@ -26,13 +26,12 @@ pub async fn get_transactions_by_ida(
 }
 
 #[instrument(skip(pool))]
-pub async fn get_mcc_by_idu(
-    Path(idu): Path<u32>,
+pub async fn get_mcc(
     State(pool): State<SqlitePool>,
 ) -> Result<Json<Vec<MccEntry>>, AppError> {
-    debug!(idu, "Fetching mcc by user id");
+    debug!("Fetching mcc");
 
-    let mcc_list = repository::get_mcc_by_idu(idu, &pool).await?;
+    let mcc_list = repository::get_mcc_by_idu(&pool).await?;
     let mut result: Vec<MccEntry> = vec![];
 
     for mcc in mcc_list.iter() {
@@ -48,13 +47,12 @@ pub async fn get_mcc_by_idu(
 }
 
 async fn fetch_transactions(
-    idu: u32,
     params: BankTransactionFilter,
     pool: &SqlitePool,
 ) -> Result<Vec<BankTransactionDTO>, AppError> {
     debug!(?params, "Fetching transactions");
 
-    let t_list = repository::get_transactions(idu, params, &pool).await?;
+    let t_list = repository::get_transactions(params, &pool).await?;
 
     // Transform the list: populate `currency` and `mcc_description` on each DTO
     let x: Vec<BankTransactionDTO> = t_list
@@ -87,20 +85,18 @@ async fn fetch_transactions(
 
 #[instrument(skip(pool))]
 pub async fn get_transactions(
-    Path(idu): Path<u32>,
     State(pool): State<SqlitePool>,
     Json(params): Json<BankTransactionFilter>,
 ) -> Result<Json<Vec<BankTransactionDTO>>, AppError> {
-    Ok(Json(fetch_transactions(idu, params, &pool).await?))
+    Ok(Json(fetch_transactions(params, &pool).await?))
 }
 
 #[instrument(skip(pool))]
 pub async fn download_csv(
-    Path(idu): Path<u32>,
     State(pool): State<SqlitePool>,
     Json(params): Json<BankTransactionFilter>,
 ) -> Result<impl IntoResponse, AppError> {
-    let data = fetch_transactions(idu, params, &pool).await?;
+    let data = fetch_transactions(params, &pool).await?;
 
     // Write records into an in-memory byte buffer
     let mut wtr = csv::Writer::from_writer(vec![]);
@@ -124,11 +120,10 @@ pub async fn download_csv(
 
 #[instrument(skip(pool))]
 pub async fn download_json(
-    Path(idu): Path<u32>,
     State(pool): State<SqlitePool>,
     Json(params): Json<BankTransactionFilter>,
 ) -> Result<impl IntoResponse, AppError> {
-    let data = fetch_transactions(idu, params, &pool).await?;
+    let data = fetch_transactions(params, &pool).await?;
 
     let bytes = serde_json::to_vec_pretty(&data)
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -148,11 +143,10 @@ pub async fn download_json(
 
 #[instrument(skip(pool))]
 pub async fn download_xlsx(
-    Path(idu): Path<u32>,
     State(pool): State<SqlitePool>,
     Json(params): Json<BankTransactionFilter>,
 ) -> Result<impl IntoResponse, AppError> {
-    let data = fetch_transactions(idu, params, &pool).await?;
+    let data = fetch_transactions(params, &pool).await?;
 
     let mut workbook = Workbook::new();
     let sheet = workbook.add_worksheet();

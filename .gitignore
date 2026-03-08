@@ -1,5 +1,6 @@
 /target
 bills.db
+mimir.db
 Cargo.lock
 .idea
 logs

@@ -1,6 +1,6 @@
 # Mimir Analytics
 
-[Українська версія: README.ua.md](README.ua.md)
+[Українська версія: README.UA.md](README.UA.md)
 
 > Mímir is the Norse figure of wisdom and counsel.
 

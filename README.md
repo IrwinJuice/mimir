@@ -1,5 +1,7 @@
 # Mimir Analytics
 
+[Українська версія: README.ua.md](README.ua.md)
+
 > Mímir is the Norse figure of wisdom and counsel.
 
 **Mimir Analytics** is an open-source, self-hosted tool for local analysis of bank transactions. Connect your bank accounts, sync transactions, and explore your spending through charts and powerful filters — all on your own machine, with your data never leaving it.
@@ -16,9 +18,8 @@
 
 - 📥 **Bank integration** — Connects to banks (now only [Monobank](https://monobank.ua/) support) via its open API to pull transactions automatically.
 - 💾 **Local SQLite storage** — All data is stored in a local `mimir.db` file. No cloud, no third parties.
-- 📊 **Charts & analytics** — Visualize spending over time, by category, or by account through an Angular-based frontend.
+- 📊 **Charts & analytics** — Visualize spending over time, by category, or by account.
 - 🔍 **Advanced filters** — Filter transactions by date range, account, amount, currency, MCC category, description, and more. Combine filters with `AND`, `OR`, `AND NOT`, `OR NOT` combinators.
-- 🏷️ **MCC category support** — Transactions are enriched with [Merchant Category Code](https://en.wikipedia.org/wiki/Merchant_category_code) descriptions (Visa & Mastercard references included).
 - 📤 **Export** — Download filtered transactions as **CSV**, **XLSX**, or **JSON**.
 ---
 
@@ -28,7 +29,7 @@ Pre-built binaries for **Windows** and **Linux** are available on the [releases 
 
 ### Windows
 
-1. Download `mimir-windows-x86_64.zip` from the [latest release](https://github.com/IrwinJuice/mimir/releases/latest).
+1. Download `mimir-windows-x86_64` from the [latest release](https://github.com/IrwinJuice/mimir/releases/latest).
 2. Extract the archive.
 3. Edit `Mimir.toml` to set your preferred port (default `42000`).
 4. Run the executable:
@@ -39,7 +40,7 @@ Pre-built binaries for **Windows** and **Linux** are available on the [releases 
 
 ### Linux
 
-1. Download `mimir-linux-x86_64.tar.gz` from the [latest release](https://github.com/IrwinJuice/mimir/releases/latest).
+1. Download `mimir-linux-x86_64` from the [latest release](https://github.com/IrwinJuice/mimir/releases/latest).
 2. Extract the archive:
    ```bash
    tar -xzf mimir-linux-x86_64.tar.gz
@@ -64,9 +65,11 @@ Pre-built binaries for **Windows** and **Linux** are available on the [releases 
 
 ---
 
-## Getting Started
+## Developer Guide
 
 ### Prerequisites
+
+> For frontend see https://github.com/IrwinJuice/mimir-client
 
 - [Rust](https://www.rust-lang.org/tools/install) (edition 2024)
 - A [Monobank API token](https://api.monobank.ua/) (free, available in the Monobank app)
@@ -120,21 +123,6 @@ src/
 ```
 
 ---
-
-## Developer Guide
-
-> For frontend see https://github.com/IrwinJuice/mimir-client
-
-### Prerequisites
-
-- [Rust](https://www.rust-lang.org/tools/install) toolchain (edition 2024, via `rustup`)
-- `cargo` and `sqlx-cli` for backend work
-
-Install `sqlx-cli` with SQLite support:
-
-```bash
-cargo install sqlx-cli --no-default-features --features sqlite
-```
 
 ### Running in Development Mode
 

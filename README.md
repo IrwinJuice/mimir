@@ -20,8 +20,39 @@
 - 🔍 **Advanced filters** — Filter transactions by date range, account, amount, currency, MCC category, description, and more. Combine filters with `AND`, `OR`, `AND NOT`, `OR NOT` combinators.
 - 🏷️ **MCC category support** — Transactions are enriched with [Merchant Category Code](https://en.wikipedia.org/wiki/Merchant_category_code) descriptions (Visa & Mastercard references included).
 - 📤 **Export** — Download filtered transactions as **CSV**, **XLSX**, or **JSON**.
-- 
 ---
+
+## Download and run
+
+Pre-built binaries for **Windows** and **Linux** are available on the [releases page](https://github.com/IrwinJuice/mimir/releases).
+
+### Windows
+
+1. Download `mimir-windows-x86_64.zip` from the [latest release](https://github.com/IrwinJuice/mimir/releases/latest).
+2. Extract the archive.
+3. Edit `Mimir.toml` to set your preferred port (default `42000`).
+4. Run the executable:
+   ```powershell
+   .\mimir.exe
+   ```
+5. Open `http://localhost:42000` in your browser.
+
+### Linux
+
+1. Download `mimir-linux-x86_64.tar.gz` from the [latest release](https://github.com/IrwinJuice/mimir/releases/latest).
+2. Extract the archive:
+   ```bash
+   tar -xzf mimir-linux-x86_64.tar.gz
+   cd mimir
+   ```
+3. Edit `Mimir.toml` to set your preferred port (default `42000`).
+4. Make the binary executable and run it:
+   ```bash
+   chmod +x mimir
+   ./mimir
+   ```
+5. Open `http://localhost:42000` in your browser.
+
 
 ## Tech Stack
 

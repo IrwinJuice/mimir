@@ -61,19 +61,17 @@ jobs:
 
       - name: Prepare release folder and package (Linux)
         run: |
-          mkdir -p release/linux/web
-          # copy client dist contents into release/linux/web
-          cp -a client-dist/mimir-clint/*. release/linux/web/
+          mkdir -p release/linux/static
+          # copy client dist contents into release/linux/static
+          cp -a client-dist/mimir-client/*. release/linux/static/
           # copy linux binary (crate name from Cargo.toml)
           cp target/release/mimir-service release/linux/
-          # create tar.gz that contains the *contents* of the `linux` folder at the archive root
-          tar -czf mimir-linux-x86_64.tar.gz -C release/linux .
 
       - name: Upload mimir-linux-x86_64 artifact
         uses: actions/upload-artifact@v4
         with:
           name: mimir-linux-x86_64
-          path: mimir-linux-x86_64.tar.gz
+          path: release/linux/
 
   build-windows:
     name: Build backend and package (windows)
@@ -103,17 +101,15 @@ jobs:
       - name: Prepare release folder and package (Windows)
         run: |
           New-Item -ItemType Directory -Path release\web -Force | Out-Null
-          # copy all contents of client-dist into release\windows\web
-          Copy-Item -Path client-dist\mimir-clint\* -Destination release\web -Recurse -Force
+          # copy all contents of client-dist into release\web
+          Copy-Item -Path client-dist\mimir-client\* -Destination release\windows\static\ -Recurse -Force
           # copy windows binary
           Copy-Item -Path target\release\mimir-service.exe -Destination release\windows\ -Force
-          # compress the *contents* of release\windows into the zip (so files are at archive root)
-          Compress-Archive -Path release\windows\* -DestinationPath mimir-windows-x86_64.zip -Force
         shell: pwsh
 
       - name: Upload release-windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: mimir-windows-x86_64
-          path: mimir-windows-x86_64.zip
+          path: release\windows\
 

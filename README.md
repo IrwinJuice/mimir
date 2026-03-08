@@ -4,13 +4,17 @@
 
 **Mimir Analytics** is an open-source, self-hosted tool for local analysis of bank transactions. Connect your bank accounts, sync transactions, and explore your spending through charts and powerful filters — all on your own machine, with your data never leaving it.
 
+
+![readme_title.png](assets/readme_title.png)
+
+
 > ⚠️ Do not expose port (default `42000`) to the open internet ⚠️
 
 ---
 
 ## Features
 
-- 📥 **Bank integration** — Connects to [Monobank](https://monobank.ua/) via its open API to pull transactions automatically.
+- 📥 **Bank integration** — Connects to banks (now only [Monobank](https://monobank.ua/) support) via its open API to pull transactions automatically.
 - 💾 **Local SQLite storage** — All data is stored in a local `mimir.db` file. No cloud, no third parties.
 - 📊 **Charts & analytics** — Visualize spending over time, by category, or by account through an Angular-based frontend.
 - 🔍 **Advanced filters** — Filter transactions by date range, account, amount, currency, MCC category, description, and more. Combine filters with `AND`, `OR`, `AND NOT`, `OR NOT` combinators.

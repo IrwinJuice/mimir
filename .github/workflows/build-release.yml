@@ -63,7 +63,7 @@ jobs:
           # copy client dist contents into release/linux/static
           cp -a client-dist/mimir-client/. release/linux/static/
           # copy linux binary (crate name from Cargo.toml)
-          cp target/release/mimir-service release/linux/
+          cp target/release/mimir release/linux/
 
       - name: Upload mimir-linux-x86_64 artifact
         uses: actions/upload-artifact@v4
@@ -102,7 +102,7 @@ jobs:
           # copy all contents of client-dist into release\windows\static
           Copy-Item -Path client-dist\mimir-client\* -Destination release\windows\static\ -Recurse -Force
           # copy windows binary
-          Copy-Item -Path target\release\mimir-service.exe -Destination release\windows\ -Force
+          Copy-Item -Path target\release\mimir.exe -Destination release\windows\ -Force
         shell: pwsh
 
       - name: Upload release-windows artifact

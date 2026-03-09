@@ -7,9 +7,14 @@ pub mod transaction;
 mod utils;
 mod ws_handler;
 
-use crate::account::handler::{add_account, delete_account, get_account_monitor, get_accounts, get_accounts_monitors, update_account, update_accounts_stat};
+use crate::account::handler::{
+    add_account, delete_account, get_account_monitor, get_accounts, get_accounts_monitors,
+    update_account, update_accounts_stat,
+};
 use crate::mcc_data::get_all_mcc;
-use crate::transaction::handler::{download_csv, download_json, download_xlsx, get_mcc, get_transactions, get_transactions_by_ida};
+use crate::transaction::handler::{
+    download_csv, download_json, download_xlsx, get_mcc, get_transactions,
+};
 use crate::ws_handler::{WsTx, handle_socket};
 use axum::Router;
 use axum::extract::FromRef;
@@ -64,37 +69,27 @@ async fn main() {
     let (ws_tx, _) = tokio::sync::broadcast::channel::<String>(64);
 
     // Serve Angular app from the dist folder, falling back to index.html for SPA routing
-    let serve_dir = ServeDir::new("./static")
-        .not_found_service(ServeFile::new("./static/index.html"));
+    let serve_dir =
+        ServeDir::new("./static").not_found_service(ServeFile::new("./static/index.html"));
 
     let app = Router::new()
         // Add API routes here, e.g.:
         .route("/mimir/api/mcc", get(get_all_mcc))
-        .route(
-            "/mimir/api/accounts",
-            get(get_accounts).post(add_account),
-        )
-        .route(
-            "/mimir/api/accounts/stat",
-            put(update_accounts_stat),
-        )
+        .route("/mimir/api/accounts", get(get_accounts).post(add_account))
+        .route("/mimir/api/accounts/stat", put(update_accounts_stat))
         .route(
             "/mimir/api/accounts/{ida}",
-            put(update_account).
-            delete(delete_account)
+            put(update_account).delete(delete_account),
         )
         .route("/mimir/api/transactions", post(get_transactions))
         .route("/mimir/api/transactions/csv", post(download_csv))
         .route("/mimir/api/transactions/xlsx", post(download_xlsx))
         .route("/mimir/api/transactions/json", post(download_json))
-        .route(
-            "/mimir/api/accounts/{ida}/transactions",
-            get(get_transactions_by_ida),
-        )
-        .route(
-            "/mimir/api/monitors",
-            get(get_accounts_monitors),
-        )
+        // .route(
+        //     "/mimir/api/accounts/{ida}/transactions",
+        //     get(get_transactions_by_ida),
+        // )
+        .route("/mimir/api/monitors", get(get_accounts_monitors))
         .route(
             "/mimir/api/monitors/{external_id}",
             get(get_account_monitor),

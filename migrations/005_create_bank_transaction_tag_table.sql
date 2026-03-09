@@ -1,8 +1,9 @@
 -- Create tag table
 CREATE TABLE IF NOT EXISTS bank_transaction_tag
 (
-    idt TEXT,
-    tag TEXT,
+    idt      TEXT,
+    tag      TEXT,
+    severity TEXT, -- primary, secondary, success, info, warn, danger, contrast
 
     FOREIGN KEY (idt) REFERENCES bank_transaction (id) ON DELETE CASCADE
 

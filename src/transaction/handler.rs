@@ -1,9 +1,9 @@
 use crate::account::model::StatQueryParams;
 use crate::error::AppError;
 use crate::mcc_data::{MccEntry, lookup_mcc};
-use crate::transaction::model::{BankTransactionDTO, BankTransactionFilter};
+use crate::transaction::model::{BankTransactionDTO, BankTransactionFilter, BankTransactionTag, TransactionTag};
 use crate::transaction::{BankTransaction, repository};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, header};
 use axum::response::IntoResponse;
 use axum::Json;
@@ -13,17 +13,17 @@ use sqlx::SqlitePool;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, instrument};
 
-#[instrument(skip(pool))]
-pub async fn get_transactions_by_ida(
-    Path(ida): Path<u32>,
-    State(pool): State<SqlitePool>,
-) -> Result<Json<Vec<BankTransaction>>, AppError> {
-    debug!(ida, "Fetching bank transactions by account id");
-
-    let transactions = repository::get_transactions_by_ida(ida, &pool).await?;
-    debug!(count = transactions.len(), "Found transactions");
-    Ok(Json(transactions))
-}
+// #[instrument(skip(pool))]
+// pub async fn get_transactions_by_ida(
+//     Path(ida): Path<u32>,
+//     State(pool): State<SqlitePool>,
+// ) -> Result<Json<Vec<BankTransaction>>, AppError> {
+//     debug!(ida, "Fetching bank transactions by account id");
+// 
+//     let transactions = repository::get_transactions_by_ida(ida, &pool).await?;
+//     debug!(count = transactions.len(), "Found transactions");
+//     Ok(Json(transactions))
+// }
 
 #[instrument(skip(pool))]
 pub async fn get_mcc(
@@ -31,7 +31,7 @@ pub async fn get_mcc(
 ) -> Result<Json<Vec<MccEntry>>, AppError> {
     debug!("Fetching mcc");
 
-    let mcc_list = repository::get_mcc_by_idu(&pool).await?;
+    let mcc_list = repository::get_mcc(&pool).await?;
     let mut result: Vec<MccEntry> = vec![];
 
     for mcc in mcc_list.iter() {
@@ -77,10 +77,22 @@ async fn fetch_transactions(
             t
         })
         .collect();
-
-    // debug!(?x, "Transactions");
-
     Ok(x)
+}
+
+#[instrument(skip(pool))]
+pub async fn update_transaction_tags(
+    Query(try_magic): Query<bool>,
+    State(pool): State<SqlitePool>,
+    Json(tags): Json<BankTransactionTag>,
+) -> Result<Json<Vec<TransactionTag>>, AppError> {
+    debug!(?tags, "Update transaction tags");
+    if (try_magic) {
+        // Ok(Json(repository::magic_update_transaction_tags(tags, &pool).await?))
+        Ok(Json(repository::update_transaction_tags(tags, &pool).await?))
+    } else {
+        Ok(Json(repository::update_transaction_tags(tags, &pool).await?))
+    }
 }
 
 #[instrument(skip(pool))]

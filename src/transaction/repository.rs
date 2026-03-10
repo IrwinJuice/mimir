@@ -286,7 +286,7 @@ pub async fn add_transaction_tags(
     qb.push_values(entries.iter(), |mut b, t| {
         b.push_bind(&t.idt).push_bind(&t.tag).push_bind(&t.severity);
     });
-    
+
     qb.build().execute(pool).await?;
 
     let mut handles: Vec<JoinHandle<BankTransactionTag>> = Vec::with_capacity(tags.len());
@@ -317,19 +317,34 @@ pub async fn delete_transaction_tags(
     tags: Vec<BankTransactionTag>,
     pool: &SqlitePool,
 ) -> Result<Vec<BankTransactionTag>, sqlx::Error> {
-    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
-        "DELETE FROM bank_transaction_tag where idt = ?, tag = ?, severity = ?) ",
-    );
+    let entries: Vec<(String, String, String)> = tags
+        .iter()
+        .flat_map(|btag| {
+            btag.tags.iter().map(move |t| {
+                (btag.idt.clone(), t.tag.clone(), t.severity.clone())
+            })
+        })
+        .collect();
 
-    for btag in tags.iter() {
-        qb.push_values(btag.tags.iter(), |mut b, t| {
-            b.push_bind(&btag.idt)
-                .push_bind(&t.tag)
-                .push_bind(&t.severity);
-        });
+    if !entries.is_empty() {
+        let mut qb: QueryBuilder<Sqlite> =
+            QueryBuilder::new("DELETE FROM bank_transaction_tag WHERE ");
+
+        let mut separated = qb.separated(" OR ");
+        for (idt, tag, severity) in &entries {
+            separated.push("(idt = ");
+            separated.push_bind_unseparated(idt);
+            separated.push_unseparated(" AND tag = ");
+            separated.push_bind_unseparated(tag);
+            separated.push_unseparated(" AND severity = ");
+            separated.push_bind_unseparated(severity);
+            separated.push_unseparated(")");
+        }
 
         qb.build().execute(pool).await?;
     }
+
+
 
     let mut handles: Vec<JoinHandle<BankTransactionTag>> = Vec::with_capacity(tags.len());
 

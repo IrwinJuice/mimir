@@ -1,10 +1,11 @@
 use crate::transaction::model::{
     BankTransaction, BankTransactionDTO, BankTransactionFilter, BankTransactionTag, TransactionTag,
 };
-use crate::utils::datetime::DateTimeUtc;
+use futures_util::future::join_all;
 use sqlx::sqlite::SqliteQueryResult;
-use sqlx::{QueryBuilder, Sqlite, SqlitePool};
-use tracing::debug;
+use sqlx::{Execute, QueryBuilder, Sqlite, SqlitePool};
+use tokio::task::JoinHandle;
+use tracing::{debug, error};
 
 /// Bulk-insert transactions with "INSERT OR IGNORE" to avoid duplicates by PK id
 pub async fn insert_transactions(
@@ -19,11 +20,11 @@ pub async fn insert_transactions(
     debug!(count = transactions.len(), "Inserting bills");
 
     let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
-        "INSERT OR IGNORE INTO bank_transaction (id, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance) ",
+        "INSERT OR IGNORE INTO bank_transaction (idt, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance) ",
     );
 
     qb.push_values(transactions.iter(), |mut b, transaction| {
-        b.push_bind(&transaction.id)
+        b.push_bind(&transaction.idt)
             .push_bind(transaction.ida)
             .push_bind(transaction.external_id.clone())
             .push_bind(transaction.amount)
@@ -64,10 +65,10 @@ pub async fn get_transactions(
     debug!("Selecting bank transactions");
 
     let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
-        "SELECT t.id, t.ida, t.external_id, t.amount, t.currency_code,
+        "SELECT t.idt, t.ida, t.external_id, t.amount, t.currency_code,
          t.description, t.mcc, t.hold, t.transaction_time, t.receipt_id, t.balance, a.masked_pan,
          NULL as mcc_description, NULL as currency,
-         (SELECT GROUP_CONCAT(tag || '+' || COALESCE(severity, 'primary'), ',') FROM bank_transaction_tag WHERE idt = t.id) as tags
+         (SELECT GROUP_CONCAT(tag || '+' || COALESCE(severity, 'primary'), ',') FROM bank_transaction_tag WHERE idt = t.idt) as tags
         FROM bank_transaction t
             LEFT JOIN bank_account_monitor a
             ON t.external_id = a.external_id
@@ -129,9 +130,9 @@ pub async fn get_transactions(
                             first = false;
 
                             if cond.operator == "neq" {
-                                qb.push("NOT EXISTS (SELECT 1 FROM bank_transaction_tag WHERE idt = t.id AND tag = ");
+                                qb.push("NOT EXISTS (SELECT 1 FROM bank_transaction_tag WHERE idt = t.idt AND tag = ");
                             } else {
-                                qb.push("EXISTS (SELECT 1 FROM bank_transaction_tag WHERE idt = t.id AND tag = ");
+                                qb.push("EXISTS (SELECT 1 FROM bank_transaction_tag WHERE idt = t.idt AND tag = ");
                             }
                             qb.push_bind(cond.value.clone());
                             qb.push(")");
@@ -217,46 +218,17 @@ pub async fn get_mcc(pool: &SqlitePool) -> Result<Vec<u32>, sqlx::Error> {
         .await
 }
 
-pub async fn update_transaction_tags(
-    tags: BankTransactionTag,
-    pool: &SqlitePool,
-) -> Result<Vec<TransactionTag>, sqlx::Error> {
-    let mut tx = pool.begin().await?;
-
-    sqlx::query("DELETE FROM bank_transaction_tag WHERE idt = ?")
-        .bind(&tags.idt)
-        .execute(&mut *tx)
-        .await?;
-
-    if !tags.tags.is_empty() {
-        let mut qb: QueryBuilder<Sqlite> =
-            QueryBuilder::new("INSERT INTO bank_transaction_tag (idt, tag, severity) ");
-
-        qb.push_values(tags.tags.iter(), |mut b, t| {
-            b.push_bind(&tags.idt)
-                .push_bind(&t.tag)
-                .push_bind(&t.severity);
-        });
-
-        qb.build().execute(&mut *tx).await?;
-    }
-
-    tx.commit().await?;
-
-    Ok(tags.tags)
-}
-
 pub async fn get_transaction_by_id(
     idt: String,
     pool: &SqlitePool,
 ) -> Result<BankTransaction, sqlx::Error> {
     sqlx::query_as::<Sqlite, BankTransaction>(
-            "SELECT id, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance
+        "SELECT idt, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance
             FROM bank_transaction where idt = $1",
-        )
-            .bind(idt)
-            .fetch_one(pool)
-            .await
+    )
+        .bind(idt)
+        .fetch_one(pool)
+        .await
 }
 
 pub async fn get_transactions_like(
@@ -264,7 +236,7 @@ pub async fn get_transactions_like(
     pool: &SqlitePool,
 ) -> Result<BankTransaction, sqlx::Error> {
     sqlx::query_as::<Sqlite, BankTransaction>(
-        "SELECT id, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance
+        "SELECT idt, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance
             FROM bank_transaction where idt = $1",
     )
         .bind(idt)
@@ -278,7 +250,7 @@ pub async fn get_transactions_like(
 // ) -> Result<Vec<BankTransaction>, sqlx::Error> {
 //     debug!(%ida, "Selecting bank transactions by account id");
 //     sqlx::query_as::<Sqlite, BankTransaction>(
-//         "SELECT id, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance
+//         "SELECT idt, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance
 //         FROM bank_transaction where ida = $1",
 //     )
 //         .bind(ida)
@@ -286,15 +258,129 @@ pub async fn get_transactions_like(
 //         .await
 // }
 
-// pub async fn magic_update_transaction_tags(
+pub async fn add_transaction_tags(
+    tags: Vec<BankTransactionTag>,
+    pool: &SqlitePool,
+) -> Result<Vec<BankTransactionTag>, sqlx::Error> {
+    let mut qb: QueryBuilder<Sqlite> =
+        QueryBuilder::new("INSERT OR IGNORE INTO bank_transaction_tag (idt, tag, severity) ");
+
+    #[derive(Debug)]
+    struct TagEntry {
+        idt: String,
+        tag: String,
+        severity: String,
+    }
+
+    let entries: Vec<TagEntry> = tags
+        .iter()
+        .flat_map(|btag| {
+            btag.tags.iter().map(move |t| TagEntry {
+                idt: btag.idt.clone(),
+                tag: t.tag.clone(),
+                severity: t.severity.clone(),
+            })
+        })
+        .collect();
+
+    qb.push_values(entries.iter(), |mut b, t| {
+        b.push_bind(&t.idt).push_bind(&t.tag).push_bind(&t.severity);
+    });
+    
+    qb.build().execute(pool).await?;
+
+    let mut handles: Vec<JoinHandle<BankTransactionTag>> = Vec::with_capacity(tags.len());
+
+    // Spawn tasks and collect their JoinHandles
+    for btag in tags.iter() {
+        let idt = btag.idt.clone();
+        let pool = pool.clone();
+        let handle = tokio::spawn(async move { get_transaction_tags_by_idt(idt, &pool).await });
+        handles.push(handle);
+    }
+
+    // Await all tasks to complete and collect results
+    let results = join_all(handles).await;
+
+    let mut tags: Vec<BankTransactionTag> = Vec::with_capacity(tags.len());
+    for res in results {
+        match res {
+            Ok(v) => tags.push(v),
+            Err(e) => error!(%e, "Transaction tag fetch task panicked"),
+        }
+    }
+
+    Ok(tags)
+}
+
+pub async fn delete_transaction_tags(
+    tags: Vec<BankTransactionTag>,
+    pool: &SqlitePool,
+) -> Result<Vec<BankTransactionTag>, sqlx::Error> {
+    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
+        "DELETE FROM bank_transaction_tag where idt = ?, tag = ?, severity = ?) ",
+    );
+
+    for btag in tags.iter() {
+        qb.push_values(btag.tags.iter(), |mut b, t| {
+            b.push_bind(&btag.idt)
+                .push_bind(&t.tag)
+                .push_bind(&t.severity);
+        });
+
+        qb.build().execute(pool).await?;
+    }
+
+    let mut handles: Vec<JoinHandle<BankTransactionTag>> = Vec::with_capacity(tags.len());
+
+    // Spawn tasks and collect their JoinHandles
+    for btag in tags.iter() {
+        let idt = btag.idt.clone();
+        let pool = pool.clone();
+        let handle = tokio::spawn(async move { get_transaction_tags_by_idt(idt, &pool).await });
+        handles.push(handle);
+    }
+
+    // Await all tasks to complete and collect results
+    let results = join_all(handles).await;
+
+    let mut tags: Vec<BankTransactionTag> = Vec::with_capacity(tags.len());
+    for res in results {
+        match res {
+            Ok(v) => tags.push(v),
+            Err(e) => error!(%e, "Transaction tag fetch task panicked"),
+        }
+    }
+
+    Ok(tags)
+}
+// pub async fn add_magic_transaction_tags(
 //     tags: BankTransactionTag,
 //     pool: &SqlitePool,
 // ) -> Result<Vec<BankTransactionDTO>, sqlx::Error> {
 //     let transaction = get_transaction_by_id(tags.idt, pool).await?;
 //
-//
-//
 //     transaction.mcc;
-//
-//
 // }
+//
+
+pub async fn get_transaction_tags_by_idt(idt: String, pool: &SqlitePool) -> BankTransactionTag {
+    let sql = "SELECT DISTINCT tag, severity FROM bank_transaction_tag where idt = $1";
+    let tags = sqlx::query_as::<Sqlite, TransactionTag>(sql)
+        .bind(&idt)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_else(|e| {
+            error!(%e, "Failed to fetch transaction tags for idt");
+            vec![]
+        });
+
+    BankTransactionTag { idt, tags }
+}
+
+pub async fn get_transaction_tags(pool: &SqlitePool) -> Result<Vec<TransactionTag>, sqlx::Error> {
+    let sql = "SELECT DISTINCT tag, severity FROM bank_transaction_tag";
+    sqlx::query_as::<Sqlite, TransactionTag>(sql)
+        .fetch_all(pool)
+        .await
+}

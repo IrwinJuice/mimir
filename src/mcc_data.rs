@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use axum::Json;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, instrument};
+use tracing::{instrument};
 use crate::error::AppError;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

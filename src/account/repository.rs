@@ -1,5 +1,5 @@
 use super::model::{
-    Account, AccountKind, AccountMonitor, AccountMonitorStatus, MonoAccount, NewAccount,
+    Account, AccountMonitor, AccountMonitorStatus, MonoAccount, NewAccount,
     UpdateAccount,
 };
 use secrecy::ExposeSecret;

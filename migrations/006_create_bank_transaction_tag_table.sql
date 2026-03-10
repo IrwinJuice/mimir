@@ -3,10 +3,8 @@ CREATE TABLE IF NOT EXISTS bank_transaction_tag
 (
     idt      TEXT,
     tag      TEXT,
-    severity TEXT, -- primary, secondary, success, info, warn, danger, contrast
-
-    FOREIGN KEY (idt) REFERENCES bank_transaction (id) ON DELETE CASCADE
-
+    severity TEXT, -- primary, secondary, success, info, warn, help, danger, contrast
+    UNIQUE (idt, tag, severity)
 );
 
 -- Create indexes for common queries

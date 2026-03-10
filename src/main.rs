@@ -13,7 +13,8 @@ use crate::account::handler::{
 };
 use crate::mcc_data::get_all_mcc;
 use crate::transaction::handler::{
-    download_csv, download_json, download_xlsx, get_mcc, get_transactions,
+    add_transactions_tags, delete_transactions_tags, download_csv, download_json, download_xlsx,
+    get_transaction_tags, get_transactions,
 };
 use crate::ws_handler::{WsTx, handle_socket};
 use axum::Router;
@@ -85,6 +86,12 @@ async fn main() {
         .route("/mimir/api/transactions/csv", post(download_csv))
         .route("/mimir/api/transactions/xlsx", post(download_xlsx))
         .route("/mimir/api/transactions/json", post(download_json))
+        .route("/mimir/api/tags", get(get_transaction_tags))
+        .route("/mimir/api/tags/batch_insert", post(add_transactions_tags))
+        .route(
+            "/mimir/api/tags/batch_delete",
+            post(delete_transactions_tags),
+        )
         // .route(
         //     "/mimir/api/accounts/{ida}/transactions",
         //     get(get_transactions_by_ida),

@@ -2,10 +2,25 @@ Use short, consistent tags with a namespace, direction and purpose. Suggested ta
 
 # general
 internal:transfer
+internal:to:black
+internal:to:white
 internal:to:savings
 internal:to:checking
 internal:to:investment
 internal:to:creditcard
+
+utility:all
+utility:electric
+utility:gas
+utility:water
+utility:hot_water
+utility:sanitary
+utility:sewer
+
+# donateion
+charity:all
+charity:subscription
+charity:one_time
 
 # purpose / goal
 internal:savings:emergency
@@ -23,7 +38,20 @@ fee:transfer
 fx:conversion
 reimbursable:work
 
-# examples using convention
-xfer:checking->savings:monthly
-internal:checking->investment:rebalance
-auto:salary_allocation:paycheck
+# food
+
+food:groceries
+food:groceries:bulk
+food:groceries:organic
+food:farmers_market
+food:restaurant
+food:delivery
+food:coffee
+food:snacks
+food:fast_food
+food:meal_kit
+food:meal_kit:subscription
+food:work_meal
+food:alcohol
+food:pet_food
+fee:delivery

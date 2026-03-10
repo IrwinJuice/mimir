@@ -6,7 +6,7 @@ use sqlx::types::chrono::{DateTime, Utc};
 
 /// A single tag.
 /// Severity values: primary | secondary | success | info | warn | danger | contrast
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(FromRow, Debug, Deserialize, Serialize, Clone)]
 pub struct TransactionTag {
     pub tag: String,
     pub severity: String,
@@ -30,7 +30,7 @@ pub struct MonobankTransaction {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct BankTransactionDTO {
-    pub id: String,
+    pub idt: String,
     pub external_id: String,
     pub ida: u32,
     pub amount: i64,
@@ -66,7 +66,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for BankTransactionDTO {
             _ => vec![],
         };
         Ok(Self {
-            id: row.try_get("id")?,
+            idt: row.try_get("idt")?,
             external_id: row.try_get("external_id")?,
             ida: row.try_get("ida")?,
             amount: row.try_get("amount")?,
@@ -87,7 +87,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for BankTransactionDTO {
 
 #[derive(FromRow, Debug, Deserialize, Serialize, Clone)]
 pub struct BankTransaction {
-    pub id: String,
+    pub idt: String,
     pub external_id: String,
     pub ida: u32,
     pub amount: i64,
@@ -126,7 +126,7 @@ pub struct BankTransactionFilter {
     pub to: DateTime<Utc>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct BankTransactionTag {
     pub idt: String,
     pub tags: Vec<TransactionTag>,

@@ -389,7 +389,7 @@ async fn fetch_and_persist_account(
                                 .unwrap_or_else(Utc::now);
 
                             let nb = BankTransaction {
-                                id: tx.id,
+                                idt: tx.id,
                                 external_id: monitor.external_id.clone(),
                                 ida: monitor.ida,
                                 amount: tx.amount,
@@ -401,7 +401,7 @@ async fn fetch_and_persist_account(
                                 receipt_id: tx.receipt_id,
                                 balance: Some(tx.balance),
                             };
-                            debug!(ida = monitor.ida, bill_id = %nb.id, amount = nb.amount, "Prepared NewBill");
+                            debug!(ida = monitor.ida, bill_id = %nb.idt, amount = nb.amount, "Prepared NewBill");
                             transactions.push(nb);
                         }
 

@@ -20,7 +20,7 @@ use crate::ws_handler::{WsTx, handle_socket};
 use axum::Router;
 use axum::extract::FromRef;
 use axum::http::{HeaderValue, Method, header};
-use axum::routing::{any, delete, get, get_service, post, put};
+use axum::routing::{any, get, get_service, post, put};
 use sqlx::SqlitePool;
 use std::fs::File;
 use tower_http::cors::CorsLayer;

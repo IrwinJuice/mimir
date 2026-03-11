@@ -3,7 +3,7 @@ use crate::transaction::model::{
 };
 use futures_util::future::join_all;
 use sqlx::sqlite::SqliteQueryResult;
-use sqlx::{Execute, QueryBuilder, Sqlite, SqlitePool};
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
 

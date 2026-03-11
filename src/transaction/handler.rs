@@ -1,13 +1,13 @@
 use crate::error::AppError;
-use crate::mcc_data::{MccEntry, lookup_mcc};
+use crate::mcc_data::{lookup_mcc, MccEntry};
 use crate::transaction::model::{
     BankTransactionDTO, BankTransactionFilter, BankTransactionTag, TransactionTag,
 };
-use crate::transaction::{BankTransaction, repository};
-use axum::Json;
-use axum::extract::{Query, State};
-use axum::http::{HeaderMap, header};
+use crate::transaction::{repository};
+use axum::extract::{State};
+use axum::http::{header, HeaderMap};
 use axum::response::IntoResponse;
+use axum::Json;
 use iso_currency::Currency;
 use rust_xlsxwriter::Workbook;
 use sqlx::SqlitePool;
@@ -272,7 +272,9 @@ pub async fn delete_transactions_tags(
     Json(tags): Json<Vec<BankTransactionTag>>,
 ) -> Result<Json<Vec<BankTransactionTag>>, AppError> {
     debug!(?tags, "Delete transaction tags");
-    Ok(Json(repository::delete_transaction_tags(tags, &pool).await?))
+    Ok(Json(
+        repository::delete_transaction_tags(tags, &pool).await?,
+    ))
 }
 
 #[instrument(skip(pool))]

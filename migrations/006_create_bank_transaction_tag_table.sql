@@ -1,4 +1,8 @@
 -- Create tag table
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_account_ida ON bank_account (ida);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_account_monitor_external_id ON bank_account_monitor (external_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_transaction_idt ON bank_transaction (idt);
+
 CREATE TABLE IF NOT EXISTS bank_transaction_tag
 (
     idt      TEXT,

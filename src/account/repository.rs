@@ -3,6 +3,7 @@ use super::model::{
     UpdateAccount,
 };
 use secrecy::ExposeSecret;
+use secrecy::zeroize::Zeroize;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{Sqlite, SqlitePool};
 use tracing::{debug, error, info};
@@ -52,7 +53,10 @@ pub async fn insert_mono_accounts_monitor(
         sqlx::query(
             "INSERT INTO bank_account_monitor (ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, status)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(external_id) DO NOTHING",
+             ON CONFLICT(external_id) DO UPDATE SET
+                balance = excluded.balance,
+                credit_limit = excluded.credit_limit,
+                masked_pan = excluded.masked_pan",
         )
         .bind(account.ida)
         .bind(&account.id)
@@ -178,8 +182,11 @@ pub async fn update_account(
     if payload.name.is_some() {
         set_clauses.push("name = ?");
     }
-    if payload.token.is_some() {
-        set_clauses.push("token = ?");
+    let option_token = payload.token.clone();
+    if let Some(secret_token) = option_token {
+        if !secret_token.expose_secret().is_empty() {
+            set_clauses.push("token = ?");
+        }
     }
 
     if set_clauses.is_empty() {
@@ -202,8 +209,11 @@ pub async fn update_account(
     if let Some(name) = payload.name {
         query = query.bind(name);
     }
-    if let Some(token) = payload.token {
-        query = query.bind(token.expose_secret().to_owned());
+
+    if let Some(secret_token) = payload.token {
+        if !secret_token.expose_secret().is_empty() {
+            query = query.bind(secret_token.expose_secret().to_owned());
+        }
     }
 
     query.bind(ida).fetch_one(pool).await

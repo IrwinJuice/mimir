@@ -1,9 +1,10 @@
 use crate::error::AppError;
 use crate::mcc_data::{lookup_mcc, MccEntry};
 use crate::transaction::model::{
-    BankTransactionDTO, BankTransactionFilter, BankTransactionTag, TransactionTag,
+    BankTransactionDTO, BankTransactionFilter, BankTransactionTag, MagicBankTransactionTag,
+    TransactionTag,
 };
-use crate::transaction::{repository};
+use crate::transaction::repository;
 use axum::extract::{State};
 use axum::http::{header, HeaderMap};
 use axum::response::IntoResponse;
@@ -13,18 +14,6 @@ use rust_xlsxwriter::Workbook;
 use sqlx::SqlitePool;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, instrument};
-
-// #[instrument(skip(pool))]
-// pub async fn get_transactions_by_ida(
-//     Path(ida): Path<u32>,
-//     State(pool): State<SqlitePool>,
-// ) -> Result<Json<Vec<BankTransaction>>, AppError> {
-//     debug!(ida, "Fetching bank transactions by account id");
-//
-//     let transactions = repository::get_transactions_by_ida(ida, &pool).await?;
-//     debug!(count = transactions.len(), "Found transactions");
-//     Ok(Json(transactions))
-// }
 
 #[instrument(skip(pool))]
 pub async fn get_mcc(State(pool): State<SqlitePool>) -> Result<Json<Vec<MccEntry>>, AppError> {
@@ -96,9 +85,50 @@ pub async fn download_csv(
 
     // Write records into an in-memory byte buffer
     let mut wtr = csv::Writer::from_writer(vec![]);
-    for record in &data {
-        wtr.serialize(record)
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+    // Write header manually so we can include the tags column
+    wtr.write_record(&[
+        "idt",
+        "external_id",
+        "ida",
+        "amount",
+        "currency_code",
+        "description",
+        "mcc",
+        "hold",
+        "transaction_time",
+        "receipt_id",
+        "balance",
+        "masked_pan",
+        "mcc_description",
+        "currency",
+        "tags",
+    ])
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    for t in &data {
+        let tags_str = t
+            .tags
+            .iter()
+            .map(|tag| tag.tag.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        wtr.write_record(&[
+            t.idt.as_str(),
+            t.external_id.as_str(),
+            &t.ida.to_string(),
+            &t.amount.to_string(),
+            &t.currency_code.to_string(),
+            t.description.as_deref().unwrap_or(""),
+            &t.mcc.map(|v| v.to_string()).unwrap_or_default(),
+            &t.hold.map(|v| v.to_string()).unwrap_or_default(),
+            &t.transaction_time.to_rfc3339(),
+            t.receipt_id.as_deref().unwrap_or(""),
+            &t.balance.map(|v| v.to_string()).unwrap_or_default(),
+            t.masked_pan.as_deref().unwrap_or(""),
+            t.mcc_description.as_deref().unwrap_or(""),
+            t.currency.as_deref().unwrap_or(""),
+            &tags_str,
+        ])
+        .map_err(|e| AppError::Internal(e.to_string()))?;
     }
     let bytes = wtr
         .into_inner()
@@ -173,6 +203,7 @@ pub async fn download_xlsx(
         "masked_pan",
         "mcc_description",
         "currency",
+        "tags",
     ];
     for (col, h) in headers.iter().enumerate() {
         sheet
@@ -231,6 +262,15 @@ pub async fn download_xlsx(
         sheet
             .write_string(row, 13, t.currency.as_deref().unwrap_or(""))
             .map_err(|e| AppError::Internal(e.to_string()))?;
+        let tags_str = t
+            .tags
+            .iter()
+            .map(|tag| tag.tag.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        sheet
+            .write_string(row, 14, &tags_str)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
     }
 
     let bytes = workbook
@@ -283,4 +323,12 @@ pub async fn get_transaction_tags(
 ) -> Result<Json<Vec<TransactionTag>>, AppError> {
     debug!("Fetching transaction tags");
     Ok(Json(repository::get_transaction_tags(&pool).await?))
+}
+
+#[instrument(skip(pool))]
+pub async fn get_transaction_tags_names(
+    State(pool): State<SqlitePool>,
+) -> Result<Json<Vec<String>>, AppError> {
+    debug!("Fetching transaction tags");
+    Ok(Json(repository::get_transaction_tags_names(&pool).await?))
 }

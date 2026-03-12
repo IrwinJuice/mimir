@@ -105,6 +105,7 @@ pub struct FilterCondition {
     pub field: String, // "amount" | "currency" | "description" | "receipt_id" | "mcc"
     pub operator: String, // "eq" | "neq" | "lt" | "gt" | "lte" | "gte" | "startsWith" | "endsWith" | "contains"
     pub value: String,
+    pub severity: Option<String> // primary | secondary | success | info | warn | danger | contrast
 }
 
 // combinator: "AND NOT" | "AND" | "OR NOT" | "OR"
@@ -130,4 +131,12 @@ pub struct BankTransactionFilter {
 pub struct BankTransactionTag {
     pub idt: String,
     pub tags: Vec<TransactionTag>,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct MagicBankTransactionTag {
+    pub idt: String,
+    pub tags: Vec<TransactionTag>,
+    pub by_mcc: bool,
+    pub by_description: bool,
 }

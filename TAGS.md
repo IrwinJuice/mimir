@@ -9,7 +9,7 @@ internal:to:checking
 internal:to:investment
 internal:to:creditcard
 
-utility:all
+utility
 utility:electric
 utility:gas
 utility:water
@@ -18,7 +18,7 @@ utility:sanitary
 utility:sewer
 
 # donateion
-charity:all
+charity
 charity:subscription
 charity:one_time
 
@@ -39,7 +39,7 @@ fx:conversion
 reimbursable:work
 
 # food
-
+food
 food:groceries
 food:groceries:bulk
 food:groceries:organic

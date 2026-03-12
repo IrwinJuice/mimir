@@ -3,7 +3,7 @@ use crate::transaction::model::{
 };
 use futures_util::future::join_all;
 use sqlx::sqlite::SqliteQueryResult;
-use sqlx::{QueryBuilder, Sqlite, SqlitePool};
+use sqlx::{Execute, QueryBuilder, Sqlite, SqlitePool};
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
@@ -43,20 +43,6 @@ pub async fn insert_transactions(
         .await
         .map(|_: SqliteQueryResult| ())
 }
-
-// pub async fn get_transactions_by_ida(
-//     ida: u32,
-//     pool: &SqlitePool,
-// ) -> Result<Vec<BankTransaction>, sqlx::Error> {
-//     debug!(%ida, "Selecting bank transactions by account id");
-//     sqlx::query_as::<Sqlite, BankTransaction>(
-//         "SELECT id, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance
-//         FROM bank_transaction where ida = $1",
-//     )
-//         .bind(ida)
-//         .fetch_all(pool)
-//         .await
-// }
 
 pub async fn get_transactions(
     filter: BankTransactionFilter,
@@ -110,7 +96,7 @@ pub async fn get_transactions(
     }
 
     if let Some(exceptions) = filter.exceptions {
-        for ex in &exceptions {
+        for ex in exceptions {
             if ex.conditions.is_empty() {
                 continue;
             }
@@ -119,7 +105,7 @@ pub async fn get_transactions(
             qb.push(format!(" {} (", ex.combinator));
 
             let mut first = true;
-            for cond in &ex.conditions {
+            for cond in ex.conditions {
                 // Handle tag field separately via EXISTS subquery (only eq/neq)
                 if cond.field == "tag" {
                     match cond.operator.as_str() {
@@ -129,12 +115,24 @@ pub async fn get_transactions(
                             }
                             first = false;
 
+                            // severity is required field in tag
+                            if cond.severity.is_none() {
+                                continue;
+                            }
+
+                            let severity = cond.severity.unwrap();
+                            let value = cond.value;
+
+                            debug!("value {value} : severity {severity}");
+
                             if cond.operator == "neq" {
                                 qb.push("NOT EXISTS (SELECT 1 FROM bank_transaction_tag WHERE idt = t.idt AND tag = ");
                             } else {
                                 qb.push("EXISTS (SELECT 1 FROM bank_transaction_tag WHERE idt = t.idt AND tag = ");
                             }
-                            qb.push_bind(cond.value.clone());
+                            qb.push_bind(value);
+                            qb.push(" AND severity = ");
+                            qb.push_bind(severity);
                             qb.push(")");
                         }
                         _ => {}
@@ -148,6 +146,7 @@ pub async fn get_transactions(
                     "currency" => "t.currency_code",
                     "description" => "t.description",
                     "receipt_id" => "t.receipt_id",
+                    "external_id" => "t.external_id",
                     _ => continue,
                 };
 
@@ -205,7 +204,10 @@ pub async fn get_transactions(
 
     qb.push(" order by t.transaction_time desc");
 
-    qb.build_query_as::<BankTransactionDTO>()
+    let query_as = qb.build_query_as::<BankTransactionDTO>();
+    let sql = query_as.sql();
+    debug!("sql: {sql}");
+    query_as
         .fetch_all(pool)
         .await
 }
@@ -219,7 +221,7 @@ pub async fn get_mcc(pool: &SqlitePool) -> Result<Vec<u32>, sqlx::Error> {
 }
 
 pub async fn get_transaction_by_id(
-    idt: String,
+    idt: &str,
     pool: &SqlitePool,
 ) -> Result<BankTransaction, sqlx::Error> {
     sqlx::query_as::<Sqlite, BankTransaction>(
@@ -231,32 +233,68 @@ pub async fn get_transaction_by_id(
         .await
 }
 
-pub async fn get_transactions_like(
-    idt: String,
+pub async fn get_similar_transactions(
+    idt: &str,
+    mcc: bool,
+    description: bool,
     pool: &SqlitePool,
-) -> Result<BankTransaction, sqlx::Error> {
-    sqlx::query_as::<Sqlite, BankTransaction>(
-        "SELECT idt, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance
-            FROM bank_transaction where idt = $1",
-    )
-        .bind(idt)
-        .fetch_one(pool)
-        .await
-}
+) -> Result<Vec<String>, sqlx::Error> {
+    // If no filter requested, return empty result
+    if !mcc && !description {
+        debug!(%idt, "No similarity criteria specified");
+        return Ok(vec![]);
+    }
 
-// pub async fn get_transactions_by_ida(
-//     ida: u32,
-//     pool: &SqlitePool,
-// ) -> Result<Vec<BankTransaction>, sqlx::Error> {
-//     debug!(%ida, "Selecting bank transactions by account id");
-//     sqlx::query_as::<Sqlite, BankTransaction>(
-//         "SELECT idt, ida, external_id, amount, currency_code, description, mcc, hold, transaction_time, receipt_id, balance
-//         FROM bank_transaction where ida = $1",
-//     )
-//         .bind(ida)
-//         .fetch_all(pool)
-//         .await
-// }
+    // Fetch the reference transaction; propagate DB error if not found
+    let base_tx = get_transaction_by_id(idt, pool).await?;
+
+    // Build dynamic WHERE clause: we combine requested fields with OR (mcc OR description)
+    let mut qb = QueryBuilder::new("SELECT idt FROM bank_transaction WHERE ");
+
+    let mut first = true;
+
+    if mcc {
+        if !first {
+            qb.push(" AND ");
+        }
+        // handle NULL mcc explicitly
+        match base_tx.mcc {
+            Some(m) => {
+                qb.push("(mcc = ");
+                qb.push_bind(m);
+                qb.push(")");
+            }
+            None => {
+                qb.push("(mcc IS NULL)");
+            }
+        }
+        first = false;
+    }
+
+    if description {
+        if !first {
+            qb.push(" AND ");
+        }
+        match base_tx.description {
+            Some(ref d) => {
+                qb.push("(description = ");
+                qb.push_bind(d);
+                qb.push(")");
+            }
+            None => {
+                qb.push("(description IS NULL)");
+            }
+        }
+        first = false;
+    }
+
+    qb.push(" ORDER BY transaction_time DESC");
+
+    // Fetch single-column rows as (String,) then map to Vec<String>
+    let rows: Vec<(String,)> = qb.build_query_as::<(String,)>().fetch_all(pool).await?;
+    let ids: Vec<String> = rows.into_iter().map(|(s,)| s).collect();
+    Ok(ids)
+}
 
 pub async fn add_transaction_tags(
     tags: Vec<BankTransactionTag>,
@@ -320,9 +358,9 @@ pub async fn delete_transaction_tags(
     let entries: Vec<(String, String, String)> = tags
         .iter()
         .flat_map(|btag| {
-            btag.tags.iter().map(move |t| {
-                (btag.idt.clone(), t.tag.clone(), t.severity.clone())
-            })
+            btag.tags
+                .iter()
+                .map(move |t| (btag.idt.clone(), t.tag.clone(), t.severity.clone()))
         })
         .collect();
 
@@ -343,8 +381,6 @@ pub async fn delete_transaction_tags(
 
         qb.build().execute(pool).await?;
     }
-
-
 
     let mut handles: Vec<JoinHandle<BankTransactionTag>> = Vec::with_capacity(tags.len());
 
@@ -369,15 +405,6 @@ pub async fn delete_transaction_tags(
 
     Ok(tags)
 }
-// pub async fn add_magic_transaction_tags(
-//     tags: BankTransactionTag,
-//     pool: &SqlitePool,
-// ) -> Result<Vec<BankTransactionDTO>, sqlx::Error> {
-//     let transaction = get_transaction_by_id(tags.idt, pool).await?;
-//
-//     transaction.mcc;
-// }
-//
 
 pub async fn get_transaction_tags_by_idt(idt: String, pool: &SqlitePool) -> BankTransactionTag {
     let sql = "SELECT DISTINCT tag, severity FROM bank_transaction_tag where idt = $1";
@@ -398,4 +425,9 @@ pub async fn get_transaction_tags(pool: &SqlitePool) -> Result<Vec<TransactionTa
     sqlx::query_as::<Sqlite, TransactionTag>(sql)
         .fetch_all(pool)
         .await
+}
+
+pub async fn get_transaction_tags_names(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    let sql = "SELECT DISTINCT tag FROM bank_transaction_tag";
+    sqlx::query_scalar(sql).fetch_all(pool).await
 }

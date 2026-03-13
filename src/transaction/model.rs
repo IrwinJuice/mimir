@@ -6,7 +6,7 @@ use sqlx::types::chrono::{DateTime, Utc};
 
 /// A single tag.
 /// Severity values: primary | secondary | success | info | warn | danger | contrast
-#[derive(FromRow, Debug, Deserialize, Serialize, Clone)]
+#[derive(FromRow, Debug, Deserialize, Serialize, Clone, Eq, PartialEq, Hash)]
 pub struct TransactionTag {
     pub tag: String,
     pub severity: String,
@@ -18,11 +18,11 @@ pub struct MonobankTransaction {
     pub id: String,
     pub time: i64, // seconds since epoch
     pub description: Option<String>,
-    pub mcc: Option<i32>,
+    pub mcc: Option<u32>,
     pub hold: Option<bool>,
     pub amount: i64,
     #[serde(rename = "currencyCode")]
-    pub currency_code: i32,
+    pub currency_code: u32,
     pub balance: i64,
     #[serde(rename = "receiptId")]
     pub receipt_id: Option<String>,
@@ -91,9 +91,9 @@ pub struct BankTransaction {
     pub external_id: String,
     pub ida: u32,
     pub amount: i64,
-    pub currency_code: i32,
+    pub currency_code: u32,
     pub description: Option<String>,
-    pub mcc: Option<i32>,
+    pub mcc: Option<u32>,
     pub hold: Option<bool>,
     pub transaction_time: DateTime<Utc>,
     pub receipt_id: Option<String>,

@@ -303,7 +303,7 @@ pub async fn add_transactions_tags(
     Json(tags): Json<Vec<BankTransactionTag>>,
 ) -> Result<Json<Vec<BankTransactionTag>>, AppError> {
     debug!(?tags, "Add transaction tags");
-    Ok(Json(repository::add_transaction_tags(tags, &pool).await?))
+    Ok(Json(repository::add_transaction_tags(&tags, &pool).await?))
 }
 
 #[instrument(skip(pool))]
@@ -313,7 +313,7 @@ pub async fn delete_transactions_tags(
 ) -> Result<Json<Vec<BankTransactionTag>>, AppError> {
     debug!(?tags, "Delete transaction tags");
     Ok(Json(
-        repository::delete_transaction_tags(tags, &pool).await?,
+        repository::delete_transaction_tags(&tags, &pool).await?,
     ))
 }
 

@@ -1,4 +1,7 @@
-use super::model::{Account, AccountKind, AccountMonitor, AccountMonitorStatus, MonoAccount, MonoClientInfo, NewAccount, StatQueryParams, UpdateAccount};
+use super::model::{
+    Account, AccountKind, AccountMonitor, AccountMonitorStatus, MonoAccount, MonoClientInfo,
+    NewAccount, StatQueryParams, UpdateAccount,
+};
 use super::repository;
 use crate::account::repository::update_monitor_status;
 use crate::error::AppError;
@@ -6,15 +9,18 @@ use crate::transaction;
 use crate::transaction::{BankTransaction, MonobankTransaction};
 use crate::utils::datetime::DateTimeUtc;
 use crate::ws_handler::WsTx;
-use axum::extract::{Path, Query, State};
-use axum::http::header::USER_AGENT;
-use axum::http::StatusCode;
 use axum::Json;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::http::header::USER_AGENT;
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use tokio::task::JoinSet;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, instrument, warn};
+use crate::transaction::model::{BankTransactionTag, TransactionTag};
+use crate::transaction::repository::add_transaction_tags;
 
 /// POST /mimir/api/accounts
 #[instrument(skip(pool))]
@@ -437,7 +443,11 @@ async fn fetch_and_persist_account(
             }
 
             // persist mimir
-            info!( ida = monitor.ida, bill_count = transactions.len(), "Persisting mimir");
+            info!(
+                ida = monitor.ida,
+                bill_count = transactions.len(),
+                "Persisting mimir"
+            );
 
             transaction::repository::insert_transactions(&transactions, pool)
                 .await
@@ -445,6 +455,10 @@ async fn fetch_and_persist_account(
                     error!(ida = monitor.ida, ?e, "Failed to insert mimir");
                     AppError::Internal("failed to persist mimir".into())
                 })?;
+
+            if !transactions.is_empty() {
+                persist_sim_tags(monitor, &transactions, pool).await?;
+            }
 
             // update monitor timestamps per rules: updated_at = now, last_taken_date = from if from < last_taken_date
             let now = Utc::now();
@@ -457,22 +471,65 @@ async fn fetch_and_persist_account(
                 maybe_lt = Some(cstart);
             }
 
-            repository::update_monitor_timestamps(monitor.ida, &monitor.external_id, now, maybe_lt, pool)
-                .await
-                .map_err(|e| {
-                    error!(ida = monitor.ida, ?e, "Failed to update monitor timestamps");
-                    AppError::Internal("failed to update monitor timestamps".into())
-                })?;
+            repository::update_monitor_timestamps(
+                monitor.ida,
+                &monitor.external_id,
+                now,
+                maybe_lt,
+                pool,
+            )
+            .await
+            .map_err(|e| {
+                error!(ida = monitor.ida, ?e, "Failed to update monitor timestamps");
+                AppError::Internal("failed to update monitor timestamps".into())
+            })?;
         }
     }
-
-
 
     info!(
         ida = monitor.ida,
         "fetch_and_persist_account completed successfully"
     );
 
+    Ok(())
+}
+
+async fn persist_sim_tags(monitor: &AccountMonitor, transactions: &[BankTransaction], pool: &SqlitePool) -> Result<(), AppError> {
+    let mut grouped: HashMap<(u32, String), Vec<String>> = HashMap::new();
+
+    for tx in transactions.iter() {
+        if let (Some(mcc), Some(description_ref)) = (tx.mcc, tx.description.as_ref()) {
+            let key = (mcc, description_ref.clone());
+            grouped.entry(key).or_default().push(tx.external_id.clone());
+        }
+    }
+    // collect (mcc, description) pairs from the map keys
+    let keys: Vec<(u32, String)> = grouped.keys().cloned().collect();
+    let tags = transaction::repository::get_similar_transaction_tags(&keys, pool)
+        .await
+        .map_err(|e| {
+            error!(ida = monitor.ida, ?e, "Failed to insert mimir");
+            AppError::Internal("failed to fetch tags".into())
+        })?;
+
+    // add transactions tags
+    let mut tags_insert_list = vec![];
+
+    for (key, value) in tags.into_iter() {
+        if let Some(idt_list) = grouped.get(&key) {
+            // convert HashSet<TransactionTag> -> Vec<TransactionTag>
+            let tags_vec: Vec<TransactionTag> =
+                value.into_iter().collect();
+            for tr in idt_list.iter() {
+                let tag = BankTransactionTag {
+                    idt: tr.clone(),
+                    tags: tags_vec.clone(),
+                };
+                tags_insert_list.push(tag);
+            }
+        }
+    }
+    let _ = add_transaction_tags(&tags_insert_list, pool).await;
     Ok(())
 }
 
@@ -520,7 +577,10 @@ async fn sniff_monobank_accounts(accounts: impl Iterator<Item = Account>, pool: 
                 })
                 .and_then(|body| {
                     serde_json::from_str::<MonoClientInfo>(&body).map_err(|e| {
-                        error!("Monobank deserialize error for ida={}: {}\nBody: {}", ida, e, body);
+                        error!(
+                            "Monobank deserialize error for ida={}: {}\nBody: {}",
+                            ida, e, body
+                        );
                         "upstream response parse failed".to_string()
                     })
                 })?;
@@ -548,9 +608,7 @@ async fn sniff_monobank_accounts(accounts: impl Iterator<Item = Account>, pool: 
 }
 
 /// Returns all account monitor rows
-async fn get_monitors(
-    pool: &SqlitePool,
-) -> Vec<AccountMonitor> {
+async fn get_monitors(pool: &SqlitePool) -> Vec<AccountMonitor> {
     let mut monitors = repository::fetch_all_monitors(&pool).await;
     monitors.sort_by_key(|m| m.balance);
     monitors.reverse();

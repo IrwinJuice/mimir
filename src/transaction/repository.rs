@@ -4,10 +4,11 @@ use crate::transaction::model::{
 use futures_util::future::join_all;
 use sqlx::sqlite::SqliteQueryResult;
 use sqlx::{Execute, QueryBuilder, Sqlite, SqlitePool};
+use std::collections::{HashMap, HashSet};
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
-/// Bulk-insert transactions with "INSERT OR IGNORE" to avoid duplicates by PK id
+/// Bulk-insert transactions with "INSERT OR IGNORE" to avoid duplicates by PK idt
 pub async fn insert_transactions(
     transactions: &[BankTransaction],
     pool: &SqlitePool,
@@ -123,8 +124,6 @@ pub async fn get_transactions(
                             let severity = cond.severity.unwrap();
                             let value = cond.value;
 
-                            debug!("value {value} : severity {severity}");
-
                             if cond.operator == "neq" {
                                 qb.push("NOT EXISTS (SELECT 1 FROM bank_transaction_tag WHERE idt = t.idt AND tag = ");
                             } else {
@@ -207,9 +206,7 @@ pub async fn get_transactions(
     let query_as = qb.build_query_as::<BankTransactionDTO>();
     let sql = query_as.sql();
     debug!("sql: {sql}");
-    query_as
-        .fetch_all(pool)
-        .await
+    query_as.fetch_all(pool).await
 }
 
 pub async fn get_mcc(pool: &SqlitePool) -> Result<Vec<u32>, sqlx::Error> {
@@ -231,6 +228,51 @@ pub async fn get_transaction_by_id(
         .bind(idt)
         .fetch_one(pool)
         .await
+}
+
+pub async fn get_similar_transaction_tags(
+    keys: &[(u32, String)],
+    pool: &SqlitePool,
+) -> Result<HashMap<(u32, String), HashSet<TransactionTag>>, sqlx::Error> {
+    // If no keys provided, nothing to search for
+    if keys.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // Build a query that joins tags to transactions and matches any of the (mcc, description) pairs
+    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
+        "SELECT bt.mcc, bt.description, t.tag, t.severity FROM bank_transaction_tag t JOIN bank_transaction bt ON t.idt = bt.idt WHERE ",
+    );
+
+    let mut separated = qb.separated(" OR ");
+    for (m, d) in keys {
+        separated.push("(");
+        separated.push("bt.mcc = ");
+        separated.push_bind_unseparated(m);
+        separated.push_unseparated(" AND bt.description = ");
+        separated.push_bind_unseparated(d);
+        separated.push_unseparated(")");
+    }
+
+    qb.push(" ORDER BY bt.mcc, bt.description, t.tag, t.severity");
+
+    // Rows: (mcc, description, tag, severity)
+    let rows: Vec<(i32, String, String, String)> = qb
+        .build_query_as::<(i32,String, String, String)>()
+        .fetch_all(pool)
+        .await?;
+
+    let mut map: HashMap<(u32, String), HashSet<TransactionTag>> = HashMap::new();
+    for (mcc_i32, desc, tag, severity) in rows {
+        // Convert mcc to u32
+        let mcc_u32 = mcc_i32 as u32;
+        let key = (mcc_u32, desc);
+        map.entry(key)
+            .or_default()
+            .insert(TransactionTag { tag, severity });
+    }
+
+    Ok(map)
 }
 
 pub async fn get_similar_transactions(
@@ -285,7 +327,6 @@ pub async fn get_similar_transactions(
                 qb.push("(description IS NULL)");
             }
         }
-        first = false;
     }
 
     qb.push(" ORDER BY transaction_time DESC");
@@ -297,9 +338,12 @@ pub async fn get_similar_transactions(
 }
 
 pub async fn add_transaction_tags(
-    tags: Vec<BankTransactionTag>,
+    tags: &[BankTransactionTag],
     pool: &SqlitePool,
 ) -> Result<Vec<BankTransactionTag>, sqlx::Error> {
+    if tags.is_empty() {
+        return Ok(vec![]);
+    }
     let mut qb: QueryBuilder<Sqlite> =
         QueryBuilder::new("INSERT OR IGNORE INTO bank_transaction_tag (idt, tag, severity) ");
 
@@ -352,7 +396,7 @@ pub async fn add_transaction_tags(
 }
 
 pub async fn delete_transaction_tags(
-    tags: Vec<BankTransactionTag>,
+    tags: &[BankTransactionTag],
     pool: &SqlitePool,
 ) -> Result<Vec<BankTransactionTag>, sqlx::Error> {
     let entries: Vec<(String, String, String)> = tags

@@ -1,10 +1,11 @@
+use secrecy::SecretString;
+use serde_with::{TimestampSeconds, serde_as};
 use serde::{Deserialize, Serialize};
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{FromRow, Sqlite};
 use std::fmt::{Display, Formatter};
-use secrecy::SecretString;
 
 #[derive(Deserialize, Debug)]
 pub struct NewAccount {
@@ -85,6 +86,7 @@ pub struct MonoAccount {
 }
 
 /// A row from the `accounts_monitor` table.
+#[serde_as]
 #[derive(FromRow, Debug, Serialize, Clone)]
 pub struct AccountMonitor {
     pub ida: u32,
@@ -95,8 +97,10 @@ pub struct AccountMonitor {
     pub iban: String,
     pub masked_pan: String,
     pub kind: AccountKind,
-    pub updated_at: Option<DateTime<Utc>>,
-    pub last_taken_date: Option<DateTime<Utc>>,
+    #[serde_as(as = "Option<TimestampSeconds<i64>>")]
+    pub range_end: Option<DateTime<Utc>>,
+    #[serde_as(as = "Option<TimestampSeconds<i64>>")]
+    pub range_start: Option<DateTime<Utc>>,
     pub status: AccountMonitorStatus,
 }
 

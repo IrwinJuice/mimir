@@ -1,6 +1,5 @@
 use super::model::{
-    Account, AccountMonitor, AccountMonitorStatus, MonoAccount, NewAccount,
-    UpdateAccount,
+    Account, AccountMonitor, AccountMonitorStatus, MonoAccount, NewAccount, UpdateAccount,
 };
 use secrecy::ExposeSecret;
 use secrecy::zeroize::Zeroize;
@@ -79,7 +78,7 @@ pub async fn insert_mono_accounts_monitor(
 pub async fn fetch_all_monitors(pool: &SqlitePool) -> Vec<AccountMonitor> {
     debug!("Selecting account monitors");
     sqlx::query_as::<Sqlite, AccountMonitor>(
-        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, updated_at, last_taken_date, status
+        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, range_end, range_start, status
         FROM bank_account_monitor",
     )
     .fetch_all(pool)
@@ -120,15 +119,15 @@ pub async fn update_monitor_status(
 pub async fn update_monitor_timestamps(
     ida: u32,
     external_id: &str,
-    updated_at: DateTime<Utc>,
-    maybe_last_taken_date: Option<DateTime<Utc>>,
+    range_end: DateTime<Utc>,
+    maybe_range_start: Option<DateTime<Utc>>,
     pool: &SqlitePool,
 ) -> Result<(), sqlx::Error> {
     debug!(ida, "Updating monitor timestamps");
-    if let Some(lt) = maybe_last_taken_date {
-        sqlx::query("UPDATE bank_account_monitor SET updated_at = ?, last_taken_date = ? WHERE ida = ? and external_id = ?")
-            .bind(updated_at)
-            .bind(lt)
+    if let Some(rs) = maybe_range_start {
+        sqlx::query("UPDATE bank_account_monitor SET range_end = ?, range_start = ? WHERE ida = ? and external_id = ?")
+            .bind(range_end)
+            .bind(rs)
             .bind(ida)
             .bind(external_id)
             .execute(pool)
@@ -136,9 +135,9 @@ pub async fn update_monitor_timestamps(
             .map(|_| ())
     } else {
         sqlx::query(
-            "UPDATE bank_account_monitor SET updated_at = ? WHERE ida = ? and external_id = ?",
+            "UPDATE bank_account_monitor SET range_end = ? WHERE ida = ? and external_id = ?",
         )
-        .bind(updated_at)
+        .bind(range_end)
         .bind(ida)
         .bind(external_id)
         .execute(pool)
@@ -153,7 +152,7 @@ pub async fn fetch_monitor_by_external_id(
 ) -> Result<Option<AccountMonitor>, sqlx::Error> {
     debug!(%external_id, "Selecting account monitor by external_id");
     sqlx::query_as::<Sqlite, AccountMonitor>(
-        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, updated_at, last_taken_date, status
+        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, range_end, range_start, status
         FROM bank_account_monitor where external_id = $1",
     )
         .bind(external_id)
@@ -217,4 +216,17 @@ pub async fn update_account(
     }
 
     query.bind(ida).fetch_one(pool).await
+}
+
+// Select the highest transaction_time from DB for this account.
+// If DB has rows → use that as the `range_end`.
+// Otherwise → compare current monitor.range_end with `to` and use the bigger one.
+pub async fn get_highest_transaction_time(
+    external_id: &str,
+    pool: &SqlitePool,
+) -> Result<DateTime<Utc>, sqlx::Error> {
+    sqlx::query_scalar("SELECT MAX(transaction_time) FROM bank_transaction WHERE external_id = ?")
+        .bind(external_id)
+        .fetch_one(pool)
+        .await
 }

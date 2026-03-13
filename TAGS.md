@@ -1,9 +1,13 @@
-Use short, consistent tags with a namespace, direction and purpose. Suggested tags:
+# Tag Suggestions
 
-# general
+Use short, consistent tags with a namespace, direction and purpose
+
+## general
 - internal:transfer
 - internal:to:black
 - internal:to:white
+- internal:from:black
+- internal:from:white
 - internal:to:savings
 - internal:to:checking
 - internal:to:investment
@@ -18,12 +22,12 @@ Use short, consistent tags with a namespace, direction and purpose. Suggested ta
 - utility:sanitary
 - utility:sewer
 
-# donation
+## donation
 - charity
 - charity:subscription
 - charity:one_time
 
-# purpose / goal
+## purpose / goal
 - internal:savings:emergency
 - internal:savings:tax
 - internal:savings:big_purchase
@@ -31,15 +35,16 @@ Use short, consistent tags with a namespace, direction and purpose. Suggested ta
 - internal:loan:repayment
 - internal:mortgage:principal
 
-# automation / metadata
+## automation / metadata
 - auto:subscription
 - auto:scheduled
 - auto:roundup
+- cashback
+- cashback:transfer
 - fee:transfer
-- fx:conversion
 - reimbursable:work
 
-# food
+## food
 - food
 - food:groceries
 - food:groceries:bulk

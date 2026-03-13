@@ -246,8 +246,7 @@ pub async fn get_similar_transaction_tags(
 
     let mut separated = qb.separated(" OR ");
     for (m, d) in keys {
-        separated.push("(");
-        separated.push("bt.mcc = ");
+        separated.push("(bt.mcc = ");
         separated.push_bind_unseparated(m);
         separated.push_unseparated(" AND bt.description = ");
         separated.push_bind_unseparated(d);
@@ -474,4 +473,244 @@ pub async fn get_transaction_tags(pool: &SqlitePool) -> Result<Vec<TransactionTa
 pub async fn get_transaction_tags_names(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
     let sql = "SELECT DISTINCT tag FROM bank_transaction_tag";
     sqlx::query_scalar(sql).fetch_all(pool).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transaction::model::TransactionTag;
+    use sqlx::SqlitePool;
+
+    /// Boot an isolated in-memory SQLite database and run all migrations.
+    async fn make_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("failed to open in-memory SQLite");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("migrations failed");
+        pool
+    }
+
+    /// Insert a minimal bank_transaction row (SQLite does not enforce FKs by default).
+    async fn insert_tx(pool: &SqlitePool, idt: &str, mcc: Option<i32>, description: Option<&str>) {
+        sqlx::query(
+            "INSERT OR IGNORE INTO bank_transaction
+             (idt, ida, external_id, amount, currency_code, mcc, description, hold, transaction_time)
+             VALUES (?, 1, 'ext_test', 0, 980, ?, ?, 0, datetime('now'))",
+        )
+        .bind(idt)
+        .bind(mcc)
+        .bind(description)
+        .execute(pool)
+        .await
+        .expect("insert_tx failed");
+    }
+
+    /// Insert a bank_transaction_tag row.
+    async fn insert_tag(pool: &SqlitePool, idt: &str, tag: &str, severity: &str) {
+        sqlx::query(
+            "INSERT OR IGNORE INTO bank_transaction_tag (idt, tag, severity) VALUES (?, ?, ?)",
+        )
+        .bind(idt)
+        .bind(tag)
+        .bind(severity)
+        .execute(pool)
+        .await
+        .expect("insert_tag failed");
+    }
+
+    // ── empty input ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn empty_keys_returns_empty_map() {
+        let pool = make_pool().await;
+        let result = get_similar_transaction_tags(&[], &pool)
+            .await
+            .expect("query failed");
+        assert!(result.is_empty(), "expected empty map for empty key list");
+    }
+
+    // ── no tags exist for the matched (mcc, description) pair ─────────────────
+
+    #[tokio::test]
+    async fn no_tags_in_db_returns_empty_map() {
+        let pool = make_pool().await;
+
+        // Transaction exists but has no tags
+        insert_tx(&pool, "tx1", Some(5411), Some("ATB")).await;
+
+        let keys = vec![(5411u32, "ATB".to_string())];
+        let result = get_similar_transaction_tags(&keys, &pool)
+            .await
+            .expect("query failed");
+
+        assert!(
+            result.is_empty(),
+            "no tags were inserted, map should be empty"
+        );
+    }
+
+    // ── single (mcc, description) with one tag ────────────────────────────────
+
+    #[tokio::test]
+    async fn single_key_returns_matching_tag() {
+        let pool = make_pool().await;
+
+        insert_tx(&pool, "tx_existing", Some(5411), Some("ATB")).await;
+        insert_tag(&pool, "tx_existing", "grocery", "success").await;
+
+        let keys = vec![(5411u32, "ATB".to_string())];
+        let result = get_similar_transaction_tags(&keys, &pool)
+            .await
+            .expect("query failed");
+
+        let tags = result
+            .get(&(5411u32, "ATB".to_string()))
+            .expect("key (5411, ATB) not found in result");
+
+        assert_eq!(tags.len(), 1);
+        assert!(
+            tags.contains(&TransactionTag {
+                tag: "grocery".into(),
+                severity: "success".into()
+            }),
+            "expected grocery/success tag"
+        );
+    }
+
+    // ── single key, multiple tags ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn single_key_multiple_tags_all_returned() {
+        let pool = make_pool().await;
+
+        insert_tx(&pool, "tx_multi", Some(5999), Some("Amazon")).await;
+        insert_tag(&pool, "tx_multi", "shopping", "info").await;
+        insert_tag(&pool, "tx_multi", "online", "primary").await;
+
+        let keys = vec![(5999u32, "Amazon".to_string())];
+        let result = get_similar_transaction_tags(&keys, &pool)
+            .await
+            .expect("query failed");
+
+        let tags = result
+            .get(&(5999u32, "Amazon".to_string()))
+            .expect("key (5999, Amazon) not found");
+
+        assert_eq!(tags.len(), 2, "expected two tags");
+        assert!(tags.contains(&TransactionTag {
+            tag: "shopping".into(),
+            severity: "info".into()
+        }));
+        assert!(tags.contains(&TransactionTag {
+            tag: "online".into(),
+            severity: "primary".into()
+        }));
+    }
+
+    // ── multiple keys, each matched independently ──────────────────────────────
+
+    #[tokio::test]
+    async fn multiple_keys_each_mapped_correctly() {
+        let pool = make_pool().await;
+
+        insert_tx(&pool, "tx_a", Some(5411), Some("ATB")).await;
+        insert_tag(&pool, "tx_a", "grocery", "success").await;
+
+        insert_tx(&pool, "tx_b", Some(5999), Some("Amazon")).await;
+        insert_tag(&pool, "tx_b", "shopping", "info").await;
+        insert_tag(&pool, "tx_b", "online", "primary").await;
+
+        let keys = vec![
+            (5411u32, "ATB".to_string()),
+            (5999u32, "Amazon".to_string()),
+        ];
+        let result = get_similar_transaction_tags(&keys, &pool)
+            .await
+            .expect("query failed");
+
+        assert_eq!(result.len(), 2, "expected two map entries");
+
+        let tags_a = result
+            .get(&(5411u32, "ATB".to_string()))
+            .expect("ATB not found");
+        assert_eq!(tags_a.len(), 1);
+
+        let tags_b = result
+            .get(&(5999u32, "Amazon".to_string()))
+            .expect("Amazon not found");
+        assert_eq!(tags_b.len(), 2);
+    }
+
+    // ── key not present in DB → not in result ─────────────────────────────────
+
+    #[tokio::test]
+    async fn non_matching_key_not_in_result() {
+        let pool = make_pool().await;
+
+        // A tagged transaction with different mcc
+        insert_tx(&pool, "tx_other", Some(9999), Some("Other")).await;
+        insert_tag(&pool, "tx_other", "misc", "primary").await;
+
+        // Query for a completely different pair
+        let keys = vec![(5411u32, "ATB".to_string())];
+        let result = get_similar_transaction_tags(&keys, &pool)
+            .await
+            .expect("query failed");
+
+        assert!(
+            result.is_empty(),
+            "no (5411, ATB) tagged rows, result should be empty"
+        );
+    }
+
+    // ── tags from other tx with same (mcc, description) ARE inherited ──────────
+    // This is the core behaviour of persist_sim_tags: newly inserted tx with no
+    // tags should inherit tags from older tx with the same (mcc, description).
+
+    #[tokio::test]
+    async fn new_tx_inherits_tags_from_existing_tx_same_pair() {
+        let pool = make_pool().await;
+
+        // Old transaction already has a tag
+        insert_tx(&pool, "tx_old", Some(5411), Some("ATB")).await;
+        insert_tag(&pool, "tx_old", "grocery", "success").await;
+
+        // New transaction (same mcc+description) has no tags yet
+        insert_tx(&pool, "tx_new", Some(5411), Some("ATB")).await;
+
+        // Query pretends persist_sim_tags is asking: what tags exist for (5411, ATB)?
+        let keys = vec![(5411u32, "ATB".to_string())];
+        let result = get_similar_transaction_tags(&keys, &pool)
+            .await
+            .expect("query failed");
+
+        let tags = result
+            .get(&(5411u32, "ATB".to_string()))
+            .expect("key not found");
+
+        assert!(
+            tags.contains(&TransactionTag {
+                tag: "grocery".into(),
+                severity: "success".into()
+            }),
+            "new tx should inherit grocery/success from the older tx"
+        );
+
+        // Now simulate what persist_sim_tags does: insert those tags for tx_new
+        let btag = BankTransactionTag {
+            idt: "tx_new".to_string(),
+            tags: tags.iter().cloned().collect(),
+        };
+        add_transaction_tags(&[btag], &pool)
+            .await
+            .expect("add_transaction_tags failed");
+
+        // Verify tx_new now has the tag
+        let stored = get_transaction_tags_by_idt("tx_new".to_string(), &pool).await;
+        assert_eq!(stored.tags.len(), 1);
+        assert_eq!(stored.tags[0].tag, "grocery");
+    }
 }

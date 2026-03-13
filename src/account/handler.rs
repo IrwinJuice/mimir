@@ -1,19 +1,25 @@
-use super::model::{Account, AccountKind, AccountMonitor, AccountMonitorStatus, MonoAccount, MonoClientInfo, NewAccount, StatQueryParams, UpdateAccount};
+use super::model::{
+    Account, AccountKind, AccountMonitor, AccountMonitorStatus, MonoAccount, MonoClientInfo,
+    NewAccount, StatQueryParams, UpdateAccount,
+};
 use super::repository;
-use crate::account::repository::update_monitor_status;
+use crate::account::repository::{get_highest_transaction_time, update_monitor_status};
 use crate::error::AppError;
 use crate::transaction;
+use crate::transaction::model::{BankTransactionTag, TransactionTag};
+use crate::transaction::repository::add_transaction_tags;
 use crate::transaction::{BankTransaction, MonobankTransaction};
 use crate::utils::datetime::DateTimeUtc;
 use crate::ws_handler::WsTx;
-use axum::extract::{Path, Query, State};
-use axum::http::header::USER_AGENT;
-use axum::http::StatusCode;
 use axum::Json;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::http::header::USER_AGENT;
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use tokio::task::JoinSet;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, instrument, warn};
 
 /// POST /mimir/api/accounts
@@ -211,57 +217,57 @@ async fn update_mono_accounts_stat(
 /// Compute the missing time ranges to fetch from Monobank.
 ///
 /// Rules (both columns are compared against the *request* window):
-///   - Part A (left gap):  `from < last_taken_date` → missing range is `[from, last_taken_date]`
-///   - Part B (right gap): `to   > updated_at`      → missing range is `[updated_at, to]`
+///   - Part A (left gap):  `from < range_start` → missing range is `[from, range_start]`
+///   - Part B (right gap): `to   > range_end`   → missing range is `[range_end, to]`
 ///
 /// If either DB column is NULL the corresponding gap extends to the request boundary:
-///   - `last_taken_date` NULL → Part A is `[from, to]` (no left anchor, fetch everything)
-///   - `updated_at`      NULL → Part B is `[from, to]` (no right anchor, fetch everything)
+///   - `range_start` NULL → Part A is `[from, to]` (no left anchor, fetch everything)
+///   - `range_end`   NULL → Part B is `[from, to]` (no right anchor, fetch everything)
 ///
 /// Overlapping ranges (e.g. when gaps touch in the middle) are merged before returning.
 fn compute_missing_ranges(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
-    updated_at: Option<DateTime<Utc>>,
-    last_taken_date: Option<DateTime<Utc>>,
+    range_end: Option<DateTime<Utc>>,
+    range_start: Option<DateTime<Utc>>,
 ) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
     if from >= to {
         return vec![];
     }
 
     // No markers at all – fetch the whole window.
-    if updated_at.is_none() && last_taken_date.is_none() {
+    if range_end.is_none() && range_start.is_none() {
         return vec![(from, to)];
     }
 
     let mut ranges: Vec<(DateTime<Utc>, DateTime<Utc>)> = Vec::new();
 
-    // Part A: left gap — from < last_taken_date
-    match last_taken_date {
-        Some(ltd) if from < ltd => {
+    // Part A: left gap — from < range_start
+    match range_start {
+        Some(rs) if from < rs => {
             // clamp right end so we never exceed `to`
-            let end_a = ltd.min(to);
+            let end_a = rs.min(to);
             ranges.push((from, end_a));
         }
         None => {
             // No left anchor: treat whole window as potentially missing on this side.
             ranges.push((from, to));
         }
-        _ => {} // from >= last_taken_date — no left gap
+        _ => {} // from >= range_start — no left gap
     }
 
-    // Part B: right gap — to > updated_at
-    match updated_at {
-        Some(ua) if to > ua => {
+    // Part B: right gap — to > range_end
+    match range_end {
+        Some(re) if to > re => {
             // clamp left end so we never go before `from`
-            let start_b = ua.max(from);
+            let start_b = re.max(from);
             ranges.push((start_b, to));
         }
         None => {
             // No right anchor: treat whole window as potentially missing on this side.
             ranges.push((from, to));
         }
-        _ => {} // to <= updated_at — no right gap
+        _ => {} // to <= range_end — no right gap
     }
 
     // Merge overlapping / adjacent ranges.
@@ -317,10 +323,10 @@ async fn fetch_and_persist_account(
     info!(ida = monitor.ida, external_id = %&external_id, from = %from, to = %to, "Fetching account transactions");
 
     // compute ranges
-    let ranges = compute_missing_ranges(from, to, monitor.updated_at, monitor.last_taken_date);
+    let ranges = compute_missing_ranges(from, to, monitor.range_end, monitor.range_start);
     debug!(ida = monitor.ida, ranges = ?ranges, "Computed missing ranges");
     if ranges.is_empty() {
-        // still update updated_at to now
+        // still update range_end to now
         repository::update_monitor_timestamps(monitor.ida, &external_id, Utc::now(), None, pool)
             .await?;
         info!(ida = monitor.ida, "No missing ranges, updated timestamps");
@@ -389,7 +395,7 @@ async fn fetch_and_persist_account(
                                 .unwrap_or_else(Utc::now);
 
                             let nb = BankTransaction {
-                                id: tx.id,
+                                idt: tx.id,
                                 external_id: monitor.external_id.clone(),
                                 ida: monitor.ida,
                                 amount: tx.amount,
@@ -401,7 +407,7 @@ async fn fetch_and_persist_account(
                                 receipt_id: tx.receipt_id,
                                 balance: Some(tx.balance),
                             };
-                            debug!(ida = monitor.ida, bill_id = %nb.id, amount = nb.amount, "Prepared NewBill");
+                            debug!(ida = monitor.ida, bill_id = %nb.idt, amount = nb.amount, "Prepared NewBill");
                             transactions.push(nb);
                         }
 
@@ -436,43 +442,102 @@ async fn fetch_and_persist_account(
                 }
             }
 
-            // persist mimir
-            info!( ida = monitor.ida, bill_count = transactions.len(), "Persisting mimir");
-
             transaction::repository::insert_transactions(&transactions, pool)
                 .await
                 .map_err(|e| {
-                    error!(ida = monitor.ida, ?e, "Failed to insert mimir");
-                    AppError::Internal("failed to persist mimir".into())
+                    error!(ida = monitor.ida, ?e, "Failed to insert transactions");
+                    AppError::Internal("failed to persist transactions".into())
                 })?;
 
-            // update monitor timestamps per rules: updated_at = now, last_taken_date = from if from < last_taken_date
-            let now = Utc::now();
-            let mut maybe_lt: Option<DateTime<Utc>> = None;
-            if let Some(ltd) = monitor.last_taken_date {
-                if cstart < ltd {
-                    maybe_lt = Some(cstart);
-                }
-            } else {
-                maybe_lt = Some(cstart);
+            if !transactions.is_empty() {
+                persist_sim_tags(monitor, &transactions, pool).await?;
             }
-
-            repository::update_monitor_timestamps(monitor.ida, &monitor.external_id, now, maybe_lt, pool)
-                .await
-                .map_err(|e| {
-                    error!(ida = monitor.ida, ?e, "Failed to update monitor timestamps");
-                    AppError::Internal("failed to update monitor timestamps".into())
-                })?;
         }
     }
 
+    let new_range_end = match get_highest_transaction_time(&monitor.external_id, pool).await {
+        Ok(max_tx) => {
+            // DB has transactions — use the most recent one
+            max_tx
+        }
+        Err(_) => {
+            // No transactions in DB — pick the bigger of monitor.range_end and `to`
+            match monitor.range_end {
+                Some(current) if current > to => current,
+                _ => Utc::now(),
+            }
+        }
+    };
 
+    let mut maybe_rs: Option<DateTime<Utc>> = None;
+    if let Some(rs) = monitor.range_start {
+        if from < rs {
+            maybe_rs = Some(from);
+        }
+    } else {
+        maybe_rs = Some(from);
+    }
+
+    repository::update_monitor_timestamps(
+        monitor.ida,
+        &monitor.external_id,
+        new_range_end,
+        maybe_rs,
+        pool,
+    )
+    .await
+    .map_err(|e| {
+        error!(ida = monitor.ida, ?e, "Failed to update monitor timestamps");
+        AppError::Internal("failed to update monitor timestamps".into())
+    })?;
 
     info!(
         ida = monitor.ida,
         "fetch_and_persist_account completed successfully"
     );
 
+    Ok(())
+}
+
+async fn persist_sim_tags(
+    monitor: &AccountMonitor,
+    transactions: &[BankTransaction],
+    pool: &SqlitePool,
+) -> Result<(), AppError> {
+    let mut grouped: HashMap<(u32, String), Vec<String>> = HashMap::new();
+
+    for tx in transactions.iter() {
+        if let (Some(mcc), Some(description_ref)) = (tx.mcc, tx.description.as_ref()) {
+            let key = (mcc, description_ref.clone());
+            grouped.entry(key).or_default().push(tx.idt.clone());
+        }
+    }
+    // collect (mcc, description) pairs from the map keys
+    let keys: Vec<(u32, String)> = grouped.keys().cloned().collect();
+    let tags = transaction::repository::get_similar_transaction_tags(&keys, pool)
+        .await
+        .map_err(|e| {
+            error!(ida = monitor.ida, ?e, "failed to fetch tags");
+            AppError::Internal("failed to fetch tags".into())
+        })?;
+
+    // add transactions tags
+    let mut tags_insert_list = vec![];
+
+    for (key, value) in tags.into_iter() {
+        if let Some(idt_list) = grouped.get(&key) {
+            // convert HashSet<TransactionTag> -> Vec<TransactionTag>
+            let tags_vec: Vec<TransactionTag> = value.into_iter().collect();
+            for tr in idt_list.iter() {
+                let tag = BankTransactionTag {
+                    idt: tr.clone(),
+                    tags: tags_vec.clone(),
+                };
+                tags_insert_list.push(tag);
+            }
+        }
+    }
+    let _ = add_transaction_tags(&tags_insert_list, pool).await;
     Ok(())
 }
 
@@ -520,7 +585,10 @@ async fn sniff_monobank_accounts(accounts: impl Iterator<Item = Account>, pool: 
                 })
                 .and_then(|body| {
                     serde_json::from_str::<MonoClientInfo>(&body).map_err(|e| {
-                        error!("Monobank deserialize error for ida={}: {}\nBody: {}", ida, e, body);
+                        error!(
+                            "Monobank deserialize error for ida={}: {}\nBody: {}",
+                            ida, e, body
+                        );
                         "upstream response parse failed".to_string()
                     })
                 })?;
@@ -548,9 +616,7 @@ async fn sniff_monobank_accounts(accounts: impl Iterator<Item = Account>, pool: 
 }
 
 /// Returns all account monitor rows
-async fn get_monitors(
-    pool: &SqlitePool,
-) -> Vec<AccountMonitor> {
+async fn get_monitors(pool: &SqlitePool) -> Vec<AccountMonitor> {
     let mut monitors = repository::fetch_all_monitors(&pool).await;
     monitors.sort_by_key(|m| m.balance);
     monitors.reverse();

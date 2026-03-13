@@ -216,6 +216,10 @@ feat(api)!: rename /bills endpoint to /transactions
 
 ---
 
+### Thanks to
+
+> MCC - https://github.com/Oleksios/Merchant-Category-Codes
+
 ## License
 
 See [LICENSE.md](LICENSE.md).

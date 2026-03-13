@@ -1,8 +1,8 @@
 use super::model::{
-    Account, AccountKind, AccountMonitor, AccountMonitorStatus, MonoAccount, NewAccount,
-    UpdateAccount,
+    Account, AccountMonitor, AccountMonitorStatus, MonoAccount, NewAccount, UpdateAccount,
 };
 use secrecy::ExposeSecret;
+use secrecy::zeroize::Zeroize;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{Sqlite, SqlitePool};
 use tracing::{debug, error, info};
@@ -52,7 +52,10 @@ pub async fn insert_mono_accounts_monitor(
         sqlx::query(
             "INSERT INTO bank_account_monitor (ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, status)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(external_id) DO NOTHING",
+             ON CONFLICT(external_id) DO UPDATE SET
+                balance = excluded.balance,
+                credit_limit = excluded.credit_limit,
+                masked_pan = excluded.masked_pan",
         )
         .bind(account.ida)
         .bind(&account.id)
@@ -75,7 +78,7 @@ pub async fn insert_mono_accounts_monitor(
 pub async fn fetch_all_monitors(pool: &SqlitePool) -> Vec<AccountMonitor> {
     debug!("Selecting account monitors");
     sqlx::query_as::<Sqlite, AccountMonitor>(
-        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, updated_at, last_taken_date, status
+        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, range_end, range_start, status
         FROM bank_account_monitor",
     )
     .fetch_all(pool)
@@ -116,15 +119,15 @@ pub async fn update_monitor_status(
 pub async fn update_monitor_timestamps(
     ida: u32,
     external_id: &str,
-    updated_at: DateTime<Utc>,
-    maybe_last_taken_date: Option<DateTime<Utc>>,
+    range_end: DateTime<Utc>,
+    maybe_range_start: Option<DateTime<Utc>>,
     pool: &SqlitePool,
 ) -> Result<(), sqlx::Error> {
     debug!(ida, "Updating monitor timestamps");
-    if let Some(lt) = maybe_last_taken_date {
-        sqlx::query("UPDATE bank_account_monitor SET updated_at = ?, last_taken_date = ? WHERE ida = ? and external_id = ?")
-            .bind(updated_at)
-            .bind(lt)
+    if let Some(rs) = maybe_range_start {
+        sqlx::query("UPDATE bank_account_monitor SET range_end = ?, range_start = ? WHERE ida = ? and external_id = ?")
+            .bind(range_end)
+            .bind(rs)
             .bind(ida)
             .bind(external_id)
             .execute(pool)
@@ -132,9 +135,9 @@ pub async fn update_monitor_timestamps(
             .map(|_| ())
     } else {
         sqlx::query(
-            "UPDATE bank_account_monitor SET updated_at = ? WHERE ida = ? and external_id = ?",
+            "UPDATE bank_account_monitor SET range_end = ? WHERE ida = ? and external_id = ?",
         )
-        .bind(updated_at)
+        .bind(range_end)
         .bind(ida)
         .bind(external_id)
         .execute(pool)
@@ -149,7 +152,7 @@ pub async fn fetch_monitor_by_external_id(
 ) -> Result<Option<AccountMonitor>, sqlx::Error> {
     debug!(%external_id, "Selecting account monitor by external_id");
     sqlx::query_as::<Sqlite, AccountMonitor>(
-        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, updated_at, last_taken_date, status
+        "SELECT ida, external_id, currency_code, balance, credit_limit, iban, masked_pan, kind, range_end, range_start, status
         FROM bank_account_monitor where external_id = $1",
     )
         .bind(external_id)
@@ -178,8 +181,11 @@ pub async fn update_account(
     if payload.name.is_some() {
         set_clauses.push("name = ?");
     }
-    if payload.token.is_some() {
-        set_clauses.push("token = ?");
+    let option_token = payload.token.clone();
+    if let Some(secret_token) = option_token {
+        if !secret_token.expose_secret().is_empty() {
+            set_clauses.push("token = ?");
+        }
     }
 
     if set_clauses.is_empty() {
@@ -202,9 +208,25 @@ pub async fn update_account(
     if let Some(name) = payload.name {
         query = query.bind(name);
     }
-    if let Some(token) = payload.token {
-        query = query.bind(token.expose_secret().to_owned());
+
+    if let Some(secret_token) = payload.token {
+        if !secret_token.expose_secret().is_empty() {
+            query = query.bind(secret_token.expose_secret().to_owned());
+        }
     }
 
     query.bind(ida).fetch_one(pool).await
+}
+
+// Select the highest transaction_time from DB for this account.
+// If DB has rows → use that as the `range_end`.
+// Otherwise → compare current monitor.range_end with `to` and use the bigger one.
+pub async fn get_highest_transaction_time(
+    external_id: &str,
+    pool: &SqlitePool,
+) -> Result<DateTime<Utc>, sqlx::Error> {
+    sqlx::query_scalar("SELECT MAX(transaction_time) FROM bank_transaction WHERE external_id = ?")
+        .bind(external_id)
+        .fetch_one(pool)
+        .await
 }

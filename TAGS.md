@@ -61,3 +61,31 @@ Use short, consistent tags with a namespace, direction and purpose
 - food:alcohol
 - food:pet_food
 - fee:delivery
+
+## mobile
+- mobile:bill
+- mobile:bill:monthly
+- mobile:topup
+- mobile:topup:prepaid
+- mobile:invoice
+- mobile:prepaid
+- mobile:postpaid
+- mobile:refund
+
+## salary / income
+- income
+- income:salary
+- income:salary:gross
+- income:salary:net
+- income:salary:bonus
+- income:salary:advance
+- income:salary:taxable
+- income:salary:non_taxable
+- payroll
+- payroll:employer_contrib
+- tax:withholding
+- deduction:tax
+- deduction:retirement
+- benefit:health_insurance
+- benefit:pension
+- reimbursable:work

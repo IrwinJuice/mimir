@@ -6,3 +6,4 @@ Cargo.lock
 .idea
 logs
 /back_bills.db
+/rag/mimir_rag_db
